@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prove the Qubes RPC producer accepts only its fixed service/caller and emits
-# only the fixed summary dump. A patched copy points /usr/bin/docker at a stub;
-# the production script retains its absolute runtime path.
+# only the fixed summary dump. A patched copy points /usr/bin/docker and its
+# rootless socket at test fixtures; production retains absolute runtime paths.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,14 +16,40 @@ else
 	install -d -m 0700 "$TEST_TMP_BASE"
 fi
 TEST_ROOT="$(mktemp -d "$TEST_TMP_BASE/ob1-qrexec-handler-test.XXXXXX")"
-trap 'rm -rf -- "$TEST_ROOT"' EXIT
 
 BIN="$TEST_ROOT/bin"
 COMPOSE_DIR="$TEST_ROOT/compose"
 HANDLER="$TEST_ROOT/openbrain-log-sink-dump.sh"
 DOCKER_LOG="$TEST_ROOT/docker.log"
+DOCKER_SOCKET="$TEST_ROOT/docker.sock"
+SOCKET_PID=""
+cleanup() {
+	if [[ -n "$SOCKET_PID" ]]; then
+		kill "$SOCKET_PID" 2>/dev/null || true
+		wait "$SOCKET_PID" 2>/dev/null || true
+	fi
+	rm -rf -- "$TEST_ROOT"
+}
+trap cleanup EXIT
 mkdir -p "$BIN" "$COMPOSE_DIR"
 touch "$COMPOSE_DIR/.env" "$COMPOSE_DIR/docker-compose.yml" "$DOCKER_LOG"
+
+python3 - "$DOCKER_SOCKET" <<'PY' &
+import signal
+import socket
+import sys
+
+server = socket.socket(socket.AF_UNIX)
+server.bind(sys.argv[1])
+server.listen()
+signal.pause()
+PY
+SOCKET_PID=$!
+for _ in {1..100}; do
+	[[ -S "$DOCKER_SOCKET" ]] && break
+	sleep 0.01
+done
+[[ -S "$DOCKER_SOCKET" ]]
 
 cat > "$BIN/docker" <<'EOF'
 #!/usr/bin/env bash
@@ -41,9 +67,10 @@ chmod +x "$BIN/docker"
 # This is deliberately a test-only copy: caller, compose directory, and the
 # absolute Docker path are operator-installed constants in production.
 sed \
-	-e 's|EXPECTED_CALLER="<app-qube>"|EXPECTED_CALLER="app-test"|' \
-	-e "s|COMPOSE_DIR=\"<ingress-compose-dir>\"|COMPOSE_DIR=\"$COMPOSE_DIR\"|" \
-	-e "s|/usr/bin/docker|$BIN/docker|g" \
+		-e 's|EXPECTED_CALLER="<app-qube>"|EXPECTED_CALLER="app-test"|' \
+		-e "s|COMPOSE_DIR=\"<ingress-compose-dir>\"|COMPOSE_DIR=\"$COMPOSE_DIR\"|" \
+		-e "s|^readonly DOCKER_SOCKET=.*|readonly DOCKER_SOCKET=\"$DOCKER_SOCKET\"|" \
+		-e "s|/usr/bin/docker|$BIN/docker|g" \
 	"$HANDLER_SOURCE" > "$HANDLER"
 chmod +x "$HANDLER"
 
@@ -96,6 +123,8 @@ printf 'attacker-controlled input\n' | run_handler \
 assert_eq "$TEST_DUMP_PAYLOAD" "$(cat "$TEST_ROOT/success.stdout")" \
 	"handler stdout contains only dump bytes"
 assert_eq '' "$(cat "$TEST_ROOT/success.stderr")" "successful handler stderr"
+assert_contains "$DOCKER_LOG" "--host" "explicit Docker host selection"
+assert_contains "$DOCKER_LOG" "unix://$DOCKER_SOCKET" "pinned rootless Docker socket"
 assert_contains "$DOCKER_LOG" "--project-directory" "fixed Compose invocation"
 assert_contains "$DOCKER_LOG" "$COMPOSE_DIR" "fixed Compose directory"
 assert_contains "$DOCKER_LOG" "exec" "fixed exec subcommand"
@@ -132,6 +161,16 @@ if (( docker_fail_rc == 0 )); then
 fi
 assert_eq '' "$(cat "$TEST_ROOT/docker-fail.stdout")" \
 	"failed handler publishes no dump bytes"
+
+# A missing rootless daemon is rejected before Docker; the service never falls
+# back to the removed rootful socket or an ambient CLI context.
+kill "$SOCKET_PID"
+wait "$SOCKET_PID" 2>/dev/null || true
+SOCKET_PID=""
+rm -f -- "$DOCKER_SOCKET"
+export TEST_DOCKER_MODE=success
+expect_rejected missing-rootless-socket "rootless Docker socket is unavailable" \
+	run_handler
 
 if (( failures > 0 )); then
 	echo "$failures qrexec-handler test(s) failed" >&2

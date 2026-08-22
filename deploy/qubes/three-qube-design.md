@@ -157,10 +157,10 @@ wrong tool once the point is to put a VM boundary between two of them.
   [funnel monitor](ingress-qube/README.md#funnel-monitor-host-side-not-compose)
   and
   [daily rollup](ingress-qube/README.md#daily-rollup-and-retention-host-side-not-compose).
-  It also exposes one fixed, caller-pinned qrexec producer for the aggregate-only
-  backup; it has no schedule, encryption key, or destination.
-  It holds **no** memory store and **no** app credential, and **no path to the
-  db qube**: every credential it carries belongs to the local sink, whose two
+  It also exposes one fixed, caller-pinned qrexec producer for the
+  aggregate-only backup; it has no schedule, encryption key, or destination. It
+  holds **no** memory store and **no** app credential, and **no path to the db
+  qube**: every credential it carries belongs to the local sink, whose two
   relations hold Funnel request metadata and nothing else. The unused edge `mcp`
   and `ollama` services the old override recipe once started are gone by
   construction ([#13](https://github.com/lcjanke2020/ob1-selfhosted/issues/13)

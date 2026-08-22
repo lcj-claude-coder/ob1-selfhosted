@@ -355,7 +355,8 @@ BEGIN
   -- Same question one level up: CREATE on the DATABASE would let a role mint
   -- a fresh schema and put relations outside the public-schema checks above.
   -- The stock database default gives PUBLIC CONNECT and TEMPORARY but never
-  -- CREATE, so both probes pass an untouched init.
+  -- CREATE. 01-log-sink.sql deliberately removes TEMPORARY below while keeping
+  -- CONNECT, so this probe passes the completed hardened init.
   SELECT string_agg(rolname, ', ' ORDER BY rolname) INTO offender
   FROM pg_roles
   WHERE rolname IN (
@@ -381,11 +382,21 @@ BEGIN
       'log sink: PUBLIC may CREATE schemas in this database';
   END IF;
 
-  -- TEMPORARY is the one managed database capability. Compare only explicit
-  -- role grants here (including grant option) because PostgreSQL's stock
-  -- PUBLIC TEMPORARY default remains deliberately unpinned. The rollup's
-  -- direct grant is still load-bearing: it must survive a hardened deployment
-  -- revoking that PUBLIC default.
+  -- TEMPORARY is the one managed database capability. PUBLIC must not carry it:
+  -- otherwise every login role, including the backup identity, could create
+  -- temporary objects despite an empty direct database grant in the contract.
+  IF EXISTS (
+    SELECT 1
+    FROM (SELECT (aclexplode(coalesce(datacl, acldefault('d', datdba)))).*
+          FROM pg_database WHERE datname = current_database()) a
+    WHERE a.grantee = 0 AND a.privilege_type = 'TEMPORARY'
+  ) THEN
+    RAISE EXCEPTION
+      'log sink: PUBLIC may create temporary objects in this database';
+  END IF;
+
+  -- Compare exact direct role grants here, including grant option. The rollup
+  -- alone needs TEMPORARY for its transaction-local aggregate projection.
   FOR r IN
     SELECT role.oid AS role_oid,
            role.rolname,

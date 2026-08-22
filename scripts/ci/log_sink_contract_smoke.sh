@@ -152,6 +152,21 @@ sink_sql openbrain_ingester "$OPENBRAIN_INGESTER_PASSWORD" \
   echo "monitor can read the summary table" >&2
   exit 1
 }
+# An empty custom archive must still clear the consumer's 1 KiB hostile-source
+# floor. Pin this before adding the representative restore row so a fresh sink
+# cannot fail every scheduled pull merely because it has no summaries yet.
+empty_backup_dump="$RUNNER_TEMP/funnel-summary-empty-role-smoke.dump"
+docker exec -e PGPASSWORD="$OPENBRAIN_LOGS_BACKUP_PASSWORD" \
+  "$LOG_SINK_CONTAINER" pg_dump -w -h /var/run/postgresql \
+    -U openbrain_logs_backup -d "$POSTGRES_DB" --format=custom \
+    --compress=none --strict-names --no-owner --no-privileges \
+    --table=public.funnel_access_summary > "$empty_backup_dump"
+test "$(head -c 5 "$empty_backup_dump")" = PGDMP
+test "$(stat -c %s "$empty_backup_dump")" -ge 1024
+docker exec -i "$LOG_SINK_CONTAINER" pg_restore --list \
+  < "$empty_backup_dump" \
+  | grep -F 'TABLE DATA public funnel_access_summary'
+rm -f -- "$empty_backup_dump"
 sink_super_sql \
   "insert into funnel_access_summary
      (day, socket, status_class, request_count, unique_ips)
@@ -221,11 +236,9 @@ sink_query openbrain_monitor "$OPENBRAIN_MONITOR_PASSWORD" \
   echo "a sink role can CREATE in public" >&2
   exit 1
 }
-# Routine database hardening revokes the stock PUBLIC TEMPORARY default. The
-# rollup's explicit grant must survive that without giving the capability to
-# the ingester, monitor, or backup identity.
-sink_super_query \
-  "revoke temporary on database $POSTGRES_DB from public;" >/dev/null
+# The shipped schema revokes PostgreSQL's stock PUBLIC TEMPORARY default. The
+# rollup's explicit grant remains usable without giving the capability to the
+# ingester, monitor, or backup identity.
 ! sink_sql openbrain_ingester "$OPENBRAIN_INGESTER_PASSWORD" \
   "create temporary table ingester_temp_forbidden(x int);" 2>/dev/null || {
   echo "ingester can create temporary tables" >&2
@@ -243,8 +256,6 @@ sink_sql openbrain_logs_rollup "$OPENBRAIN_LOGS_ROLLUP_PASSWORD" \
   echo "backup role can create temporary tables" >&2
   exit 1
 }
-sink_super_query \
-  "grant temporary on database $POSTGRES_DB to public;" >/dev/null
 echo "ingester INSERT-only, monitor raw-only, backup summary-only, rollup survives revoked PUBLIC TEMPORARY, no role may create persistent objects"
 
 log_sink_step "Generated status classification pins every boundary"
@@ -347,6 +358,14 @@ sink_super_query "grant select on funnel_access_log to pg_monitor;" >/dev/null
 sink_super_query "revoke select on funnel_access_log from pg_monitor;" >/dev/null
 
 log_sink_step "Assertion pins database TEMPORARY to the rollup role"
+sink_super_query \
+  "grant temporary on database $POSTGRES_DB to public;" >/dev/null
+! run_sink_assertion 2>/dev/null || {
+  echo "assertion missed PUBLIC TEMPORARY" >&2
+  exit 1
+}
+sink_super_query \
+  "revoke temporary on database $POSTGRES_DB from public;" >/dev/null
 sink_super_query \
   "revoke temporary on database $POSTGRES_DB from openbrain_logs_rollup;" \
   >/dev/null
@@ -460,5 +479,5 @@ sink_super_query \
 sink_super_query "drop function public.ci_probe();" >/dev/null
 run_sink_assertion | \
   grep -F 'log sink: authorization/topology invariants OK'
-echo "assertion catches widened grants, grant options, unsafe attributes, memberships, missing/disabled/foreign roles, database CREATE/direct-TEMPORARY drift, stray relations, stray schemas, non-system routines, and PUBLIC"
+echo "assertion catches widened grants, grant options, unsafe attributes, memberships, missing/disabled/foreign roles, database CREATE/TEMPORARY drift, stray relations, stray schemas, non-system routines, and PUBLIC"
 fi

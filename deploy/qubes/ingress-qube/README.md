@@ -63,11 +63,11 @@ docker compose exec -T --user postgres log-sink sh -eu -c '
 ' < ../../../db/log-sink/02-log-sink-assertion.sql
 ```
 
-Reapplying `01-log-sink.sql` also grants database `TEMPORARY` directly to
-`openbrain_logs_rollup`, so the new transaction-local projection works even when
-a hardened installation has revoked PostgreSQL's stock `PUBLIC` default. The
-migration then takes an access-exclusive table lock with a 10-second timeout,
-adds one stored generated column, and backfills retained rows in one
+Reapplying `01-log-sink.sql` also revokes PostgreSQL's stock database
+`TEMPORARY` grant from `PUBLIC` and grants it directly to
+`openbrain_logs_rollup`, so only the transaction-local projection can use it.
+The migration then takes an access-exclusive table lock with a 10-second
+timeout, adds one stored generated column, and backfills retained rows in one
 transaction. A busy sink fails without a partial change; leave `log-ingester`
 stopped and retry. A second successful run is a no-op. Do not recreate the
 service or restart the writer unless the assertion prints
@@ -365,9 +365,9 @@ Qubes RPC service, not a listener and not `qubes.ConnectTCP`. The app qube calls
 wrong caller or service identity, closes stdin, and runs one fixed custom-format
 uncompressed `pg_dump` of `public.funnel_access_summary` as
 `openbrain_logs_backup`. The app consumer requires its `PGDMP` signature before
-publication. That role
-has summary `SELECT` only: it cannot read `funnel_access_log`, mutate either
-table, create temporary objects, or reach the corpus.
+publication. That role has summary `SELECT` only: it cannot read
+`funnel_access_log`, mutate either table, create temporary objects, or reach the
+corpus.
 
 For a fresh sink, set a new `OPENBRAIN_LOGS_BACKUP_PASSWORD` in `.env` before
 the first `docker compose up`. For an existing volume, stop ingestion, put the
@@ -407,6 +407,22 @@ sudo install -o root -g root -m 0755 \
   /etc/qubes-rpc/openbrain.LogSinkDump
 ```
 
+The handler pins Docker to `/run/user/<uid>/docker.sock` and refuses a missing
+socket rather than falling back to rootful Docker or an ambient CLI context.
+Before policy installation, verify as the policy's `user=user` account that the
+same explicit path can see `log-sink`:
+
+```sh
+docker_socket="/run/user/$(id -u)/docker.sock"
+test -S "$docker_socket"
+docker --host "unix://$docker_socket" compose \
+  --env-file .env -f docker-compose.yml ps --status running --services \
+  | grep -Fx log-sink
+```
+
+`pg_dump` intentionally remains inside the pinned Postgres container so its
+major version matches the server.
+
 The human-reviewed dom0 policy should have one exact empty-argument allow and a
 catch-all deny, in this order (for example in
 `/etc/qubes/policy.d/30-openbrain-log-sink-dump.policy`):
@@ -426,7 +442,8 @@ Do not replace `+` with `*` on the allow line: `+` means exactly the empty
 service argument. `autostart=no` makes a stopped edge a visible backup failure
 instead of waking it unexpectedly. Verify from the app qube only after its
 bounded/encrypted consumer is staged; do not save a plaintext production dump
-there. Also prove an unrelated qube and a nonempty service argument are denied.
+there. Also prove an unrelated qube, a reverse ingress→app call, and a nonempty
+service argument are denied.
 
 **One consequence, stated plainly.** Funnel access logs and the thought corpus
 are now separate databases, so "which requests preceded this thought write" is

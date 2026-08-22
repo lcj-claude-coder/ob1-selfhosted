@@ -459,10 +459,10 @@ insert script, a `docker.service` drop-in re-applying it on daemon restarts, and
 a boot one-shot ordered after docker) is retired along with the `0.0.0.0:8787`
 publish it existed to narrow. What remains is small:
 
-| File                                                       | Install at                                         | Purpose                                                                                     |
-| ---------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| [`qubes-firewall-user-script`](qubes-firewall-user-script) | `/rw/config/qubes-firewall-user-script` (chmod +x) | `custom-input` accepts for host services (SSH on `tailscale0`; optional Syncthing)          |
-| [`ob1-app-firewall.service`](ob1-app-firewall.service)     | `/rw/config/ob1-app-firewall.service`              | one-shot that runs the script `After=tailscaled` — the applier on this qube (see below)     |
+| File                                                       | Install at                                         | Purpose                                                                                                |
+| ---------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| [`qubes-firewall-user-script`](qubes-firewall-user-script) | `/rw/config/qubes-firewall-user-script` (chmod +x) | `custom-input` accepts for host services (SSH on `tailscale0`; optional Syncthing)                     |
+| [`ob1-app-firewall.service`](ob1-app-firewall.service)     | `/rw/config/ob1-app-firewall.service`              | one-shot that runs the script `After=tailscaled` — the applier on this qube (see below)                |
 | [`rc.local`](rc.local)                                     | `/rw/config/rc.local` (chmod +x)                   | boot order: tailscaled → rootful-docker-off → firewall → forwarder/corpus backup → Funnel-summary pull |
 
 Two properties do the work the old machinery did:
@@ -589,23 +589,31 @@ newest=$(ls -t "$RECV_DIR"/db-*.sql.gz.gpg 2>/dev/null | head -1)
 The second daily backup is an **app-initiated pull** from the ingress qube's
 fixed `openbrain.LogSinkDump` qrexec service. It does not use TCP, a database
 route, or a destination credential on the edge. The ingress side emits an
-uncompressed custom `pg_dump` containing only `funnel_access_summary`; this
-qube treats those bytes as hostile, enforces a 1 KiB–64 MiB bound, the `PGDMP`
+uncompressed custom `pg_dump` containing only `funnel_access_summary`; this qube
+treats those bytes as hostile, enforces a 1 KiB–64 MiB bound, the `PGDMP`
 archive signature, and a five-minute timeout, encrypts the stream directly to
 the existing public key, and atomically publishes the encrypted artifact plus
 SHA-256 digest in the existing off-box directory. No plaintext dump is written
 to disk.
 
-The default timer runs at 04:00 with up to 15 minutes of jitter, after the
-03:30 corpus backup. It uses an independent lock and does not depend on the
-app→DB forwarder. Fourteen daily snapshots give a nominal 24-hour RPO (plus
-jitter and replication lag) without extending the edge's raw 30-day IP and
-user-agent retention. The initial restore-drill target is two hours; measure and
-record the actual result rather than treating that target as proof.
+The default timer runs at 04:00 with up to 15 minutes of jitter, after the 03:30
+corpus backup. It uses an independent lock and does not depend on the app→DB
+forwarder. Fourteen daily snapshots give a nominal 24-hour RPO (plus jitter and
+replication lag) without extending the edge's raw 30-day IP and user-agent
+retention. The initial restore-drill target is two hours; measure and record the
+actual result rather than treating that target as proof.
+
+Because the timer is persistent, a catch-up dispatch can occur while the ingress
+qube is still stopped. The policy's `autostart=no` then produces one visible
+failure instead of waking the edge; start the service once manually after the
+edge is available. During staging, distinguish that expected boot-order failure
+from a broken policy or producer.
 
 Stage the complete set under the same persistent unit directory as the corpus
 backup. `TARGET_QUBE` is the ingress qube's **dom0 identity**, which may differ
-from its DNS/SSH name. Reuse the deployed corpus backup's `PUBKEY` and `OUT_DIR`:
+from its DNS/SSH name. Reuse the deployed corpus backup's service account,
+`PUBKEY`, and `OUT_DIR`; if that account is not `user`, edit both `User=` and
+`ReadWritePaths=` in the staged service before installing it:
 
 ```sh
 sudo install -d -m 0750 /rw/config/openbrain-units
@@ -628,11 +636,11 @@ sudo install -m 0644 \
 sudo systemctl daemon-reload
 ```
 
-Add the same site-specific `OnFailure=` drop-in used by
-`ob1-db-backup.service`, narrowing `ReadWritePaths=` to the exact deployed
-`OUT_DIR` at the same time. Add `/.funnel-summary-*` to the Syncthing folder's
-`.stignore`; that excludes hidden staging/lock names, while final
-`funnel-summary-*.dump.gpg` and `.sha256` files still replicate.
+Add the same site-specific `OnFailure=` drop-in used by `ob1-db-backup.service`,
+narrowing `ReadWritePaths=` to the exact deployed `OUT_DIR` at the same time.
+Add `/.funnel-summary-*` to the Syncthing folder's `.stignore`; that excludes
+hidden staging/lock names, while final `funnel-summary-*.dump.gpg` and `.sha256`
+files still replicate.
 
 After the ingress handler and dom0 policy are installed, run one foreground
 service and inspect the exact final path it reports:
@@ -648,7 +656,8 @@ systemctl list-timers ob1-funnel-summary-backup.timer --no-pager
 ```
 
 Before enabling the timer, verify all failure cases from the rollout checklist:
-wrong source qube, nonempty service argument, stopped/denied target, empty and
+an unrelated source qube, a reverse ingress→app invocation, a nonempty service
+argument, stopped/denied target, missing rootless Docker socket, empty and
 truncated source, oversized source, timeout, bad recipient, output-directory
 failure, and lock contention. Each must exit nonzero, trigger the notifier, and
 leave no final artifact for that run. The repository tests cover those local
@@ -658,7 +667,8 @@ permissions.
 The receiving/private-key host closes the asynchronous half of the chain. Alert
 if the newest `funnel-summary-*.dump.gpg` is older than roughly 26 hours, verify
 its digest, and record a successful Syncthing receipt before calling rollout
-complete. A local publish is useful evidence but is not proof of off-box receipt.
+complete. A local publish is useful evidence but is not proof of off-box
+receipt.
 
 ### Disposable, no-network restore drill
 

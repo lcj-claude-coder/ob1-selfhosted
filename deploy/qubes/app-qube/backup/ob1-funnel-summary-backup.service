@@ -7,6 +7,9 @@ Wants=qubes-qrexec-agent.service
 
 [Service]
 Type=oneshot
+# Run as the same unprivileged account that owns the corpus backup's OUT_DIR.
+# The shipped Qubes example uses `user`; replace both `user` paths when the
+# deployed corpus backup uses a different account.
 User=user
 UMask=0077
 ExecStart=/usr/bin/bash /rw/config/openbrain-units/ob1-funnel-summary-backup.sh
@@ -15,7 +18,8 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
-# Narrow this with a deployment drop-in when OUT_DIR is known exactly.
+# Replace `user` when needed, then narrow this with a deployment drop-in when
+# OUT_DIR is known exactly.
 ReadWritePaths=/home/user
 
 [Install]

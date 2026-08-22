@@ -17,6 +17,7 @@ EXPECTED_CALLER="<app-qube>"
 COMPOSE_DIR="<ingress-compose-dir>"
 
 readonly SERVICE_FULL_NAME="openbrain.LogSinkDump+"
+readonly DOCKER_SOCKET="/run/user/$UID/docker.sock"
 
 if [[ "$EXPECTED_CALLER" == "<app-qube>" ||
       "$COMPOSE_DIR" == "<ingress-compose-dir>" ]]; then
@@ -40,6 +41,10 @@ if [[ ! -x /usr/bin/docker || ! -r "$COMPOSE_DIR/.env" ||
 	echo "openbrain.LogSinkDump: compose runtime or deployment files are unavailable" >&2
 	exit 69
 fi
+if [[ ! -S "$DOCKER_SOCKET" ]]; then
+	echo "openbrain.LogSinkDump: rootless Docker socket is unavailable" >&2
+	exit 69
+fi
 
 # The caller cannot feed data or commands into this service. The only bytes
 # returned are produced by the fixed pg_dump below. The backup role can SELECT
@@ -47,7 +52,7 @@ fi
 # existing 30-day, on-edge-only lifetime.
 exec </dev/null
 cd "$COMPOSE_DIR"
-exec /usr/bin/docker compose \
+exec /usr/bin/docker --host "unix://$DOCKER_SOCKET" compose \
 	--project-directory "$COMPOSE_DIR" \
 	--env-file "$COMPOSE_DIR/.env" \
 	-f "$COMPOSE_DIR/docker-compose.yml" \

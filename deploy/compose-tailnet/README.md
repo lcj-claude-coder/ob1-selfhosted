@@ -240,13 +240,13 @@ stack measures it without giving an edge parser a route to the corpus.
   `mcp_auth_events` records the application-side auth decision separately,
   including verified identities on admitted requests.
 
-Raw request metadata is intentionally disposable after 30 days; daily
-aggregates retain 365 days. The sink has its own administrative-only superuser,
-INSERT-only ingester, DML rollup, optional raw-table monitor, and optional
-aggregate-only `openbrain_logs_backup` credentials. The Qubes deployment uses
-that last identity through a fixed app-initiated qrexec service; this single-host
-Pattern B recipe does not install a scheduler or transport for it by default.
-The superuser is used for init, adoption, upgrades, and explicit checks, but is
+Raw request metadata is intentionally disposable after 30 days; daily aggregates
+retain 365 days. The sink has its own administrative-only superuser, INSERT-only
+ingester, DML rollup, optional raw-table monitor, and optional aggregate-only
+`openbrain_logs_backup` credentials. The Qubes deployment uses that last
+identity through a fixed app-initiated qrexec service; this single-host Pattern
+B recipe does not install a scheduler or transport for it by default. The
+superuser is used for init, adoption, upgrades, and explicit checks, but is
 never passed to a long-running client service. No sink credential is passed to
 the corpus container. Create the configured `LOG_SINK_SOCKET_DIR` before first
 start and keep its absolute path short enough for a unix socket.

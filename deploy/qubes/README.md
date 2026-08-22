@@ -304,9 +304,9 @@ log-ingester, and its own **local socket-only Postgres log sink**, with **no**
 memory store and **no** app credential. It carries only sink credentials — the
 administrative-only sink superuser, the INSERT-only ingester, the rollup role,
 the optional raw-table monitor, and the optional aggregate-only backup role —
-and **no** path to the db qube at all.
-Caddy reverse-proxies to the app qube's mcp through the host-side ConnectTCP
-forwarder (`MCP_UPSTREAM=<this-qube-ip>:18787` — see
+and **no** path to the db qube at all. Caddy reverse-proxies to the app qube's
+mcp through the host-side ConnectTCP forwarder
+(`MCP_UPSTREAM=<this-qube-ip>:18787` — see
 [the ingress→app hop](ingress-qube/README.md#the-ingressapp-hop-qubesconnecttcp)).
 The log-ingester writes its `funnel_access_log` rows to the
 [local sink](ingress-qube/README.md#local-log-sink) over a unix socket

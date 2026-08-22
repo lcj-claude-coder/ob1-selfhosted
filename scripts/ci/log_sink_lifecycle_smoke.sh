@@ -111,10 +111,9 @@ docker compose "${adoption_compose_opts[@]}" \
   exec -T log-sink sh -c \
     'test ! -e "$PGDATA/.openbrain-log-sink-init-complete"'
 
-# A previously valid hardened sink may have revoked PostgreSQL's stock PUBLIC
-# TEMPORARY grant. Model that pre-upgrade posture by revoking it and removing
-# the new direct rollup grant that current 01-log-sink.sql applied during
-# fixture init.
+# Model a hardened legacy sink from before the rollup's direct TEMPORARY grant:
+# keep PUBLIC revoked and remove the new direct grant that current
+# 01-log-sink.sql applied during fixture init.
 docker compose "${adoption_compose_opts[@]}" \
   -f "$adoption_root/compose.yml" \
   exec -T -e PGPASSWORD="$POSTGRES_PASSWORD" log-sink \

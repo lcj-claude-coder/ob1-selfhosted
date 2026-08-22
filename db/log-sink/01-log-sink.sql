@@ -114,12 +114,11 @@ CREATE TABLE IF NOT EXISTS funnel_access_summary (
 CREATE INDEX IF NOT EXISTS idx_funnel_access_summary_day ON funnel_access_summary (day DESC);
 
 -- ---------- Grants ---------------------------------------------------------
--- PUBLIC gets nothing. Every role below is named explicitly, and
--- 02-log-sink-assertion.sql fails the init if any of them acquires more.
--- Database TEMPORARY is granted directly to the rollup role: its
--- transaction-local projection needs temporary-table access, and the direct
--- grant keeps hardened installs working after they revoke the stock PUBLIC
--- default.
+-- PUBLIC keeps only PostgreSQL's stock database CONNECT capability. It gets no
+-- schema CREATE and no database TEMPORARY; every application capability below
+-- is named explicitly, and 02-log-sink-assertion.sql fails the init if any role
+-- acquires more. Database TEMPORARY is granted directly to the rollup role
+-- because its transaction-local projection needs temporary-table access.
 --
 -- The `public` SCHEMA itself: PostgreSQL 15+ already revokes CREATE from
 -- PUBLIC, so managed roles can use the schema but not add objects to it.
@@ -130,6 +129,7 @@ GRANT USAGE ON SCHEMA public TO openbrain_ingester, openbrain_logs_rollup;
 
 DO $$
 BEGIN
+  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', current_database());
   EXECUTE format('GRANT TEMPORARY ON DATABASE %I TO openbrain_logs_rollup', current_database());
 END;
 $$ LANGUAGE plpgsql;
