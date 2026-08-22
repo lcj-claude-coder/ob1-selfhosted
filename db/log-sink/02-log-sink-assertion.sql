@@ -26,13 +26,13 @@
 -- definer body runs as its owner, so a user-created routine is a data path that
 -- needs no table grant at all.
 --
--- Deliberately NOT asserted: PostgreSQL's stock PUBLIC defaults — database
--- CONNECT/TEMP, USAGE on schema public, EXECUTE on built-in functions. None
--- of those reaches the two data tables (section 3 pins their ACLs exactly);
--- asserting them away would mean fighting harmless defaults on every major
--- version instead of guarding the promise that matters. Section 4 separately
--- pins a direct TEMPORARY grant for the rollup so hardening PUBLIC cannot break
--- its transaction-local projection.
+-- Deliberately NOT asserted: PostgreSQL's remaining stock PUBLIC defaults —
+-- database CONNECT, USAGE on schema public, and EXECUTE on built-in functions.
+-- None of those reaches the two data tables (section 3 pins their ACLs exactly),
+-- so asserting them away would mean fighting harmless defaults on every major
+-- version instead of guarding the promise that matters. TEMPORARY is different:
+-- 01-log-sink.sql revokes it from PUBLIC, and section 4 asserts that boundary
+-- while pinning the rollup's direct grant for its transaction-local projection.
 --
 -- Why assert at all on a cluster whose contents are disposable: the sink sits
 -- on the internet-facing qube. Its value is not the data — it is the promise
@@ -311,10 +311,11 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- ---------- 4. Schema/database creation closed; rollup TEMPORARY pinned ----
--- The claim is about the three LOGIN roles, not about the schema's ACL in the
--- abstract: PostgreSQL 15+ ships `public` owned by `pg_database_owner` with
--- CREATE granted to it, which is the database owner (the bootstrap superuser
--- that ran init) and nobody else. Asserting "no CREATE grant exists at all"
+-- The claim is about every managed LOGIN role from the contract, not the schema
+-- ACL in the abstract. PostgreSQL 15+ ships `public` owned by
+-- `pg_database_owner`, with CREATE granted to that implicit role; it resolves
+-- to the database owner (the bootstrap superuser that ran init) and nobody else.
+-- Asserting "no CREATE grant exists at all"
 -- fails on that stock default, so assert reachability per role instead.
 --
 -- has_schema_privilege resolves role membership and PUBLIC for us, so it sees
