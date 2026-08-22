@@ -70,13 +70,17 @@ what backs it up.
   ([`security-model.md` § Container layer](security-model.md#container-layer))
   is the only intra-host boundary.
 - **Qubes three-qube split** — the same doors, plus VM boundaries: ingress, app,
-  and db each in their own qube. Both inter-qube hops ride dom0-policy-gated
-  `qubes.ConnectTCP` channels: the app qube's mcp and the db qube's Postgres
-  each bind **loopback only** (no network listener at all), dom0 policy names
-  the one permitted caller per channel, and the inner gate — mcp's OAuth door,
-  Postgres's scram — authenticates what arrives. The edge has NO path to the db
-  qube at all (no qrexec rule, no credential), its Funnel logs landing in a
-  local socket-only sink on the ingress qube. Detail:
+  and db each in their own qube. The two online request/database hops ride
+  dom0-policy-gated `qubes.ConnectTCP` channels: the app qube's mcp and the db
+  qube's Postgres each bind **loopback only** (no network listener at all), dom0
+  policy names the one permitted caller per channel, and the inner gate — mcp's
+  OAuth door, Postgres's scram — authenticates what arrives. A separate fixed
+  custom qrexec service lets the app qube pull only the aggregate Funnel summary
+  from ingress for encrypted backup; it accepts no argument or stdin, and its
+  exact app→ingress allow is followed by a catch-all deny. The edge cannot
+  initiate that transfer and still has NO path to the db qube at all (no qrexec
+  rule, no credential); its raw Funnel logs remain in its local socket-only
+  sink. Detail:
   [`three-qube-design.md`](../deploy/qubes/three-qube-design.md#implemented-appdb-transport-qubesconnecttcp--no-listener).
 
 Full statement of both doors:
@@ -94,12 +98,13 @@ One line per layer; each links to its section of
   no auth door; fresh hash/revocation lookup for native tokens;
   pinned-everything JWT validation; boot-time JWKS probe; shaped auth failures
   that close a credential-status side-channel.
-- [**Database**](security-model.md#database-layer) — seven named role identities
+- [**Database**](security-model.md#database-layer) — eight named role identities
   across two disjoint clusters, plus forced RLS on memory rows; missing audience
   context matches nothing, the app cannot DELETE thoughts or mutate token
   lifecycle state, the token administrator cannot read memories/hashes, and the
   ingester exists only on a separate log cluster where it can INSERT into one
-  observability table.
+  observability table, and the optional backup role can SELECT only the
+  aggregate table.
 - [**Container**](security-model.md#container-layer) — the MCP server and
   log-ingester run non-root with `cap_drop: ALL` and a read-only rootfs; Caddy
   keeps the image's root user but runs with a genuinely empty capability set (a

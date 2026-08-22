@@ -114,15 +114,14 @@ CREATE TABLE IF NOT EXISTS funnel_access_summary (
 CREATE INDEX IF NOT EXISTS idx_funnel_access_summary_day ON funnel_access_summary (day DESC);
 
 -- ---------- Grants ---------------------------------------------------------
--- PUBLIC gets nothing. Every role below is named explicitly, and
--- 02-log-sink-assertion.sql fails the init if any of them acquires more.
--- Database TEMPORARY is granted directly to the rollup role: its
--- transaction-local projection needs temporary-table access, and the direct
--- grant keeps hardened installs working after they revoke the stock PUBLIC
--- default.
+-- PUBLIC keeps only PostgreSQL's stock database CONNECT capability. It gets no
+-- schema CREATE and no database TEMPORARY; every application capability below
+-- is named explicitly, and 02-log-sink-assertion.sql fails the init if any role
+-- acquires more. Database TEMPORARY is granted directly to the rollup role
+-- because its transaction-local projection needs temporary-table access.
 --
 -- The `public` SCHEMA itself: PostgreSQL 15+ already revokes CREATE from
--- PUBLIC, so the three roles can use the schema but not add objects to it.
+-- PUBLIC, so managed roles can use the schema but not add objects to it.
 -- Stated explicitly rather than inherited, because this cluster's whole
 -- claim is "these two tables and nothing else".
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
@@ -130,7 +129,24 @@ GRANT USAGE ON SCHEMA public TO openbrain_ingester, openbrain_logs_rollup;
 
 DO $$
 BEGIN
+  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', current_database());
   EXECUTE format('GRANT TEMPORARY ON DATABASE %I TO openbrain_logs_rollup', current_database());
+END;
+$$ LANGUAGE plpgsql;
+
+-- openbrain_logs_backup: optional SELECT-only access to the aggregate table.
+-- The qrexec service exports this table alone, so the off-box chain preserves
+-- the 365-day operational history without extending raw IP/user-agent rows
+-- beyond their 30-day on-edge retention. No raw-table or sequence grant is
+-- present: a future full/raw backup is a separate, review-visible decision.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openbrain_logs_backup') THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA public TO openbrain_logs_backup';
+    EXECUTE 'GRANT SELECT ON funnel_access_summary TO openbrain_logs_backup';
+  ELSE
+    RAISE NOTICE 'openbrain_logs_backup role missing; skipping backup grant (OPENBRAIN_LOGS_BACKUP_PASSWORD unset)';
+  END IF;
 END;
 $$ LANGUAGE plpgsql;
 

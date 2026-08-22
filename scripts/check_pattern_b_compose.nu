@@ -170,7 +170,12 @@ def assert-pattern-b-sink [name: string, rendered: record] {
             error make { msg: $"($name): log-sink is missing ($required_mount)" }
         }
     }
-    for retired_secret in ["OPENBRAIN_INGESTER_PASSWORD" "OPENBRAIN_MONITOR_PASSWORD"] {
+    for retired_secret in [
+        "OPENBRAIN_INGESTER_PASSWORD"
+        "OPENBRAIN_LOGS_ROLLUP_PASSWORD"
+        "OPENBRAIN_MONITOR_PASSWORD"
+        "OPENBRAIN_LOGS_BACKUP_PASSWORD"
+    ] {
         if $retired_secret in $corpus_env {
             error make { msg: $"($name): corpus still receives ($retired_secret)" }
         }

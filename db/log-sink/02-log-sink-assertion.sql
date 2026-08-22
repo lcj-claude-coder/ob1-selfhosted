@@ -12,13 +12,13 @@
 --
 -- The checked contract is intentionally ordinary and enforceable: this
 -- cluster contains TWO persistent data tables, TWO required roles, and at most
--- one optional monitor role;
+-- two optional read roles (monitor and aggregate-only backup);
 -- every table, sequence, and column privilege those roles hold is exactly
 -- enumerated, grant options included (section 3), none of them holds a
 -- cluster-level privilege (section 1), none has a CREATE route into schema
 -- public or into this database (section 4), and the role set itself is
 -- closed — nothing exists beyond the bootstrap superuser, the two required
--- roles, and the optional monitor (section 5). Sections 6-9 close indirect
+-- roles, plus the optional monitor and backup roles (section 5). Sections 6-9 close indirect
 -- routes the direct-ACL comparison cannot see: effective privileges arriving
 -- via role membership, memberships themselves, ownership, default ACLs,
 -- grants parked on a grantee outside the enumerated set, stray schemas, and
@@ -26,13 +26,13 @@
 -- definer body runs as its owner, so a user-created routine is a data path that
 -- needs no table grant at all.
 --
--- Deliberately NOT asserted: PostgreSQL's stock PUBLIC defaults — database
--- CONNECT/TEMP, USAGE on schema public, EXECUTE on built-in functions. None
--- of those reaches the two data tables (section 3 pins their ACLs exactly);
--- asserting them away would mean fighting harmless defaults on every major
--- version instead of guarding the promise that matters. Section 4 separately
--- pins a direct TEMPORARY grant for the rollup so hardening PUBLIC cannot break
--- its transaction-local projection.
+-- Deliberately NOT asserted: PostgreSQL's remaining stock PUBLIC defaults —
+-- database CONNECT, USAGE on schema public, and EXECUTE on built-in functions.
+-- None of those reaches the two data tables (section 3 pins their ACLs exactly),
+-- so asserting them away would mean fighting harmless defaults on every major
+-- version instead of guarding the promise that matters. TEMPORARY is different:
+-- 01-log-sink.sql revokes it from PUBLIC, and section 4 asserts that boundary
+-- while pinning the rollup's direct grant for its transaction-local projection.
 --
 -- Why assert at all on a cluster whose contents are disposable: the sink sits
 -- on the internet-facing qube. Its value is not the data — it is the promise
@@ -81,6 +81,14 @@ BEGIN
         "password_env": "OPENBRAIN_MONITOR_PASSWORD",
         "database_privileges": "",
         "direct_privileges": "funnel_access_log=SELECT"
+      },
+      {
+        "key": "backup",
+        "name": "openbrain_logs_backup",
+        "required": false,
+        "password_env": "OPENBRAIN_LOGS_BACKUP_PASSWORD",
+        "database_privileges": "",
+        "direct_privileges": "funnel_access_summary=SELECT"
       }
     ]$role_contract$,
     false
@@ -242,7 +250,7 @@ $$ LANGUAGE plpgsql;
 -- forward their access.
 --
 -- Grants to PUBLIC (grantee OID 0) are folded into every role's actual set:
--- PUBLIC never appears in pg_auth_members but reaches all three roles, so a
+-- PUBLIC never appears in pg_auth_members but reaches every managed role, so a
 -- `GRANT ... TO PUBLIC` would otherwise slip past a per-role comparison.
 --
 -- The bootstrap superuser owns both relations and therefore appears in relacl
@@ -303,10 +311,11 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- ---------- 4. Schema/database creation closed; rollup TEMPORARY pinned ----
--- The claim is about the three LOGIN roles, not about the schema's ACL in the
--- abstract: PostgreSQL 15+ ships `public` owned by `pg_database_owner` with
--- CREATE granted to it, which is the database owner (the bootstrap superuser
--- that ran init) and nobody else. Asserting "no CREATE grant exists at all"
+-- The claim is about every managed LOGIN role from the contract, not the schema
+-- ACL in the abstract. PostgreSQL 15+ ships `public` owned by
+-- `pg_database_owner`, with CREATE granted to that implicit role; it resolves
+-- to the database owner (the bootstrap superuser that ran init) and nobody else.
+-- Asserting "no CREATE grant exists at all"
 -- fails on that stock default, so assert reachability per role instead.
 --
 -- has_schema_privilege resolves role membership and PUBLIC for us, so it sees
@@ -347,7 +356,8 @@ BEGIN
   -- Same question one level up: CREATE on the DATABASE would let a role mint
   -- a fresh schema and put relations outside the public-schema checks above.
   -- The stock database default gives PUBLIC CONNECT and TEMPORARY but never
-  -- CREATE, so both probes pass an untouched init.
+  -- CREATE. 01-log-sink.sql deliberately removes TEMPORARY below while keeping
+  -- CONNECT, so this probe passes the completed hardened init.
   SELECT string_agg(rolname, ', ' ORDER BY rolname) INTO offender
   FROM pg_roles
   WHERE rolname IN (
@@ -373,11 +383,21 @@ BEGIN
       'log sink: PUBLIC may CREATE schemas in this database';
   END IF;
 
-  -- TEMPORARY is the one managed database capability. Compare only explicit
-  -- role grants here (including grant option) because PostgreSQL's stock
-  -- PUBLIC TEMPORARY default remains deliberately unpinned. The rollup's
-  -- direct grant is still load-bearing: it must survive a hardened deployment
-  -- revoking that PUBLIC default.
+  -- TEMPORARY is the one managed database capability. PUBLIC must not carry it:
+  -- otherwise every login role, including the backup identity, could create
+  -- temporary objects despite an empty direct database grant in the contract.
+  IF EXISTS (
+    SELECT 1
+    FROM (SELECT (aclexplode(coalesce(datacl, acldefault('d', datdba)))).*
+          FROM pg_database WHERE datname = current_database()) a
+    WHERE a.grantee = 0 AND a.privilege_type = 'TEMPORARY'
+  ) THEN
+    RAISE EXCEPTION
+      'log sink: PUBLIC may create temporary objects in this database';
+  END IF;
+
+  -- Compare exact direct role grants here, including grant option. The rollup
+  -- alone needs TEMPORARY for its transaction-local aggregate projection.
   FOR r IN
     SELECT role.oid AS role_oid,
            role.rolname,
@@ -415,7 +435,7 @@ $$ LANGUAGE plpgsql;
 
 -- ---------- 5. The role set itself is closed ------------------------------
 -- Sections 1 and 3 reason about roles they can NAME: 1 scans 'openbrain%',
--- 3 compares the three enumerated. A role outside both patterns — created by
+-- 3 compares the enumerated set. A role outside both patterns — created by
 -- the administrative superuser, or by drift nobody noticed — would pass every
 -- check above while falsifying the header's closed role set. Three closures
 -- fix that: exactly one superuser (the bootstrap role init connects as), both
@@ -424,8 +444,8 @@ $$ LANGUAGE plpgsql;
 -- predefined pg_* roles (the pg_ prefix is reserved by the server — even a
 -- superuser cannot CREATE ROLE under it, so the exclusion is not a loophole).
 --
--- The monitor role is OPTIONAL (00-log-sink-roles.sh creates it only when
--- OPENBRAIN_MONITOR_PASSWORD is set): this check permits its absence and
+-- The monitor and backup roles are OPTIONAL (00-log-sink-roles.sh creates
+-- each only when its password is set): this check permits either absence and
 -- forbids additions, matching that contract.
 DO $$
 DECLARE
