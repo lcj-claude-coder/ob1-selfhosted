@@ -36,6 +36,9 @@ GRANT USAGE ON SEQUENCE public.mcp_auth_events_id_seq TO openbrain_app;
 -- It cannot insert or update audit rows and has no sequence access. Give it
 -- direct, non-delegable schema USAGE so hardened deployments do not depend on
 -- PostgreSQL's default PUBLIC schema ACL.
+-- This owner-issued convergence cannot safely revoke schema ACLs issued by a
+-- different grantor or default ACLs owned by arbitrary roles; the final grants
+-- assertion reports those sources with explicit repair guidance.
 REVOKE ALL ON SCHEMA public FROM openbrain_auth_rollup CASCADE;
 GRANT USAGE ON SCHEMA public TO openbrain_auth_rollup;
 
@@ -88,6 +91,9 @@ $auth_rollup_create$ LANGUAGE plpgsql;
 
 -- The trusted dump/exploration identity remains read-only even if a deployed
 -- catalog picked up a direct or delegated audit-object mutation grant.
+-- Cluster-wide role memberships are not inferred or revoked here; the final
+-- assertion requires this identity to remain standalone so SET ROLE cannot
+-- bypass effective read-only privilege checks.
 REVOKE ALL ON public.mcp_auth_events
   FROM openbrain_readonly CASCADE;
 GRANT SELECT ON public.mcp_auth_events TO openbrain_readonly;

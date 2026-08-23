@@ -290,9 +290,10 @@ export async function probeDbAtBoot(
              ),
            -- Mirror db/03's security-relevant auth-audit boundary at boot:
            -- exact non-delegable app table/sequence rights, a SELECT-only
-           -- backup role, and a standalone rollup with direct schema USAGE
-           -- but no persistent-object, sideways relation, sequence,
-           -- membership, or definer-function path.
+           -- standalone backup role, and a standalone rollup with direct,
+           -- wholly non-delegable schema USAGE but no future default ACL,
+           -- persistent-object, sideways relation, sequence, membership, or
+           -- definer-function path.
            COALESCE(
              to_regclass('public.mcp_auth_events') IS NOT NULL
              AND to_regclass('public.mcp_auth_events_id_seq') IS NOT NULL
@@ -357,6 +358,11 @@ export async function probeDbAtBoot(
                    to_regclass('public.mcp_auth_events_id_seq'),
                    'USAGE, UPDATE'
                  )
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_auth_members AS readonly_membership
+                   WHERE readonly_membership.member = readonly.oid
+                 )
              )
              AND EXISTS (
                SELECT 1
@@ -389,6 +395,27 @@ export async function probeDbAtBoot(
                      AND usage_acl.grantee = rollup.oid
                      AND usage_acl.privilege_type = 'USAGE'
                      AND NOT usage_acl.is_grantable
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_namespace AS grantable_usage_namespace
+                   CROSS JOIN LATERAL
+                     aclexplode(grantable_usage_namespace.nspacl)
+                       AS grantable_usage_acl
+                   WHERE grantable_usage_namespace.oid =
+                         to_regnamespace('public')::oid
+                     AND grantable_usage_acl.grantee = rollup.oid
+                     AND grantable_usage_acl.privilege_type = 'USAGE'
+                     AND grantable_usage_acl.is_grantable
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_default_acl AS rollup_default_acl
+                   CROSS JOIN LATERAL
+                     aclexplode(rollup_default_acl.defaclacl)
+                       AS rollup_default_entry
+                   WHERE rollup_default_acl.defaclobjtype IN ('r', 'S')
+                     AND rollup_default_entry.grantee = rollup.oid
                  )
                  AND has_table_privilege(
                    rollup.oid,
@@ -661,9 +688,11 @@ export async function probeDbAtBoot(
           `[db] Postgres at ${target} still has missing or widened auth-audit ` +
             `grants. Provision openbrain_auth_rollup, apply ` +
             `db/12-auth-audit-grants.sql as the database owner (it removes ` +
-            `direct grant-option and CREATE drift), then run ` +
-            `db/03-grants-assertion.sql to identify any inherited or ` +
-            `ownership-based source before starting this server version.`,
+            `owner-issued direct grant-option and CREATE drift), then run ` +
+            `db/03-grants-assertion.sql as a superuser. Explicitly remove any ` +
+            `reported openbrain_readonly membership, alternate-grantor schema ` +
+            `grant option, default ACL, inherited privilege, or ownership-based ` +
+            `source before starting this server version.`,
         );
       }
       // update_thought/move_thought (1.22.0) need the revision-history table

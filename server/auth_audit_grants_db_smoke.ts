@@ -7,7 +7,12 @@
 // and proves the production boot probe refuses to serve until the drift is
 // repaired.
 
-import { assert, assertRejects, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { Pool, type PoolClient } from "postgres";
 import { probeDbAtBoot } from "./db_boot_probe.ts";
 
@@ -15,9 +20,11 @@ const host = Deno.env.get("DB_SMOKE_HOST") ?? "127.0.0.1";
 const port = Number(Deno.env.get("DB_SMOKE_PORT") ?? "55439");
 const adminPassword = Deno.env.get("POSTGRES_PASSWORD");
 const appPassword = Deno.env.get("OPENBRAIN_APP_PASSWORD");
+const readonlyPassword = Deno.env.get("OPENBRAIN_READONLY_PASSWORD");
 
 assert(adminPassword, "POSTGRES_PASSWORD is required");
 assert(appPassword, "OPENBRAIN_APP_PASSWORD is required");
+assert(readonlyPassword, "OPENBRAIN_READONLY_PASSWORD is required");
 assert(Number.isInteger(port) && port > 0, "DB_SMOKE_PORT must be a port");
 
 const database = "openbrain";
@@ -39,6 +46,18 @@ const appPool = new Pool(
   },
   1,
 );
+const readonlyPool = new Pool(
+  {
+    hostname: host,
+    port,
+    database,
+    user: "openbrain_readonly",
+    password: readonlyPassword,
+  },
+  1,
+);
+
+const readonlyMembershipMarker = "ci-readonly-membership-drift";
 
 async function withAdmin(
   operation: (client: PoolClient) => Promise<void>,
@@ -65,6 +84,11 @@ async function cleanDrift(): Promise<void> {
         EXECUTE 'REVOKE ci_auth_audit_carrier FROM openbrain_app';
         EXECUTE 'DROP OWNED BY ci_auth_audit_carrier';
         EXECUTE 'DROP ROLE ci_auth_audit_carrier';
+      END IF;
+      IF to_regrole('ci_auth_audit_readonly_carrier') IS NOT NULL THEN
+        EXECUTE 'REVOKE ci_auth_audit_readonly_carrier FROM openbrain_readonly';
+        EXECUTE 'DROP OWNED BY ci_auth_audit_readonly_carrier';
+        EXECUTE 'DROP ROLE ci_auth_audit_readonly_carrier';
       END IF;
     END;
     $cleanup$ LANGUAGE plpgsql;
@@ -102,6 +126,11 @@ async function cleanDrift(): Promise<void> {
       FROM openbrain_readonly CASCADE;
     GRANT SELECT ON SEQUENCE public.mcp_auth_events_id_seq
       TO openbrain_readonly;
+
+    ALTER DEFAULT PRIVILEGES
+      REVOKE SELECT ON TABLES FROM openbrain_auth_rollup;
+    DELETE FROM public.mcp_auth_events
+      WHERE path = '${readonlyMembershipMarker}';
   `);
 }
 
@@ -109,11 +138,13 @@ interface DriftCase {
   label: string;
   introduce: string;
   repair: string;
+  exercise?: () => Promise<void>;
 }
 
 async function expectBootRefusal(drift: DriftCase): Promise<void> {
   await adminSql(drift.introduce);
   try {
+    await drift.exercise?.();
     const error = await assertRejects(
       () => probeDbAtBoot(appPool, target),
       Error,
@@ -126,6 +157,62 @@ async function expectBootRefusal(drift: DriftCase): Promise<void> {
 
   // Every repair returns to the exact accepted boundary before the next case.
   await probeDbAtBoot(appPool, target);
+}
+
+async function exerciseReadonlySetRoleDelete(): Promise<void> {
+  await adminSql(`
+    INSERT INTO public.mcp_auth_events
+      (outcome, reason, middleware, path)
+    VALUES (
+      'denied', 'missing_credentials', 'require_auth',
+      '${readonlyMembershipMarker}'
+    )
+  `);
+
+  await withAdmin(async (client) => {
+    const result = await client.queryArray(
+      `SELECT has_table_privilege(
+        'openbrain_readonly', 'public.mcp_auth_events', 'DELETE'
+      )`,
+    );
+    assertEquals(
+      result.rows[0]?.[0],
+      false,
+      "INHERIT FALSE must hide the carrier DELETE from effective checks",
+    );
+  });
+
+  const client = await readonlyPool.connect();
+  try {
+    await client.queryArray("BEGIN");
+    try {
+      await client.queryArray(
+        "SET LOCAL ROLE ci_auth_audit_readonly_carrier",
+      );
+      await client.queryArray(
+        `DELETE FROM public.mcp_auth_events
+         WHERE path = '${readonlyMembershipMarker}'`,
+      );
+      await client.queryArray("COMMIT");
+    } catch (error) {
+      await client.queryArray("ROLLBACK");
+      throw error;
+    }
+  } finally {
+    client.release();
+  }
+
+  await withAdmin(async (client) => {
+    const result = await client.queryArray(
+      `SELECT count(*)::integer FROM public.mcp_auth_events
+       WHERE path = '${readonlyMembershipMarker}'`,
+    );
+    assertEquals(
+      result.rows[0]?.[0],
+      0,
+      "readonly SET ROLE carrier must reproduce evidence deletion",
+    );
+  });
 }
 
 const driftCases: DriftCase[] = [
@@ -193,10 +280,58 @@ const driftCases: DriftCase[] = [
     repair: "REVOKE DELETE ON public.mcp_auth_events FROM openbrain_readonly",
   },
   {
+    label: "readonly SET ROLE audit DELETE",
+    introduce: `
+      CREATE ROLE ci_auth_audit_readonly_carrier
+        NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+        NOREPLICATION NOBYPASSRLS;
+      GRANT USAGE ON SCHEMA public TO ci_auth_audit_readonly_carrier;
+      GRANT SELECT, DELETE ON public.mcp_auth_events
+        TO ci_auth_audit_readonly_carrier;
+      GRANT ci_auth_audit_readonly_carrier TO openbrain_readonly
+        WITH INHERIT FALSE, SET TRUE
+    `,
+    exercise: exerciseReadonlySetRoleDelete,
+    repair: `
+      REVOKE ci_auth_audit_readonly_carrier FROM openbrain_readonly;
+      DROP OWNED BY ci_auth_audit_readonly_carrier;
+      DROP ROLE ci_auth_audit_readonly_carrier
+    `,
+  },
+  {
     label: "missing direct rollup schema USAGE",
     introduce:
       "REVOKE USAGE ON SCHEMA public FROM openbrain_auth_rollup CASCADE",
     repair: "GRANT USAGE ON SCHEMA public TO openbrain_auth_rollup",
+  },
+  {
+    label: "multi-grantor rollup schema USAGE grant option",
+    introduce: `
+      CREATE ROLE ci_auth_audit_schema_grantor
+        NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+        NOREPLICATION NOBYPASSRLS;
+      GRANT USAGE ON SCHEMA public TO ci_auth_audit_schema_grantor
+        WITH GRANT OPTION;
+      SET ROLE ci_auth_audit_schema_grantor;
+      GRANT USAGE ON SCHEMA public TO openbrain_auth_rollup
+        WITH GRANT OPTION;
+      RESET ROLE
+    `,
+    repair: `
+      SET ROLE ci_auth_audit_schema_grantor;
+      REVOKE ALL PRIVILEGES ON SCHEMA public
+        FROM openbrain_auth_rollup CASCADE;
+      RESET ROLE;
+      DROP OWNED BY ci_auth_audit_schema_grantor;
+      DROP ROLE ci_auth_audit_schema_grantor
+    `,
+  },
+  {
+    label: "rollup future-relation default ACL",
+    introduce:
+      "ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO openbrain_auth_rollup",
+    repair:
+      "ALTER DEFAULT PRIVILEGES REVOKE SELECT ON TABLES FROM openbrain_auth_rollup",
   },
   {
     label: "rollup schema creation",
@@ -265,6 +400,7 @@ try {
       await adminSql("GRANT USAGE ON SCHEMA public TO PUBLIC");
     } finally {
       await appPool.end();
+      await readonlyPool.end();
       await adminPool.end();
     }
   }

@@ -184,6 +184,9 @@ GRANT USAGE ON SEQUENCE mcp_auth_events_id_seq TO openbrain_app;
 -- It can inspect and delete auth events, but cannot fabricate or rewrite one
 -- and has no need for the BIGSERIAL sequence. Give it direct, non-delegable
 -- schema USAGE so the job does not depend on PostgreSQL's default PUBLIC ACL.
+-- This owner-issued convergence cannot safely revoke schema ACLs issued by a
+-- different grantor or default ACLs owned by arbitrary roles; the final grants
+-- assertion reports those sources with explicit repair guidance.
 REVOKE ALL ON SCHEMA public FROM openbrain_auth_rollup CASCADE;
 GRANT USAGE ON SCHEMA public TO openbrain_auth_rollup;
 
@@ -228,6 +231,8 @@ $auth_rollup_create$ LANGUAGE plpgsql;
 -- (01-schema.sql also grants future public sequences via ALTER DEFAULT
 -- PRIVILEGES, but that only fires for objects created by the role that ran it;
 -- these explicit grants don't depend on the creating role.)
+-- Role memberships are cluster-wide and are not inferred or revoked here; the
+-- final assertion requires this dump identity to remain standalone.
 REVOKE ALL ON mcp_auth_events FROM openbrain_readonly CASCADE;
 GRANT SELECT ON mcp_auth_events TO openbrain_readonly;
 REVOKE ALL ON SEQUENCE mcp_auth_events_id_seq

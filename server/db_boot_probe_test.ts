@@ -131,6 +131,7 @@ Deno.test("probeDbAtBoot: success path validates connectivity and hybrid schema"
   assert(queries[1].includes("openbrain_auth_rollup"));
   assert(queries[1].includes("UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER"));
   assert(queries[1].includes("AS application_membership"));
+  assert(queries[1].includes("AS readonly_membership"));
   assert(queries[1].includes("FROM pg_auth_members AS membership"));
   assert(queries[1].includes("FROM pg_roles AS readonly"));
   assert(queries[1].includes("FROM pg_class AS relation"));
@@ -138,6 +139,8 @@ Deno.test("probeDbAtBoot: success path validates connectivity and hybrid schema"
   assert(queries[1].includes("FROM pg_namespace AS usage_namespace"));
   assert(queries[1].includes("aclexplode(usage_namespace.nspacl)"));
   assert(queries[1].includes("usage_acl.privilege_type = 'USAGE'"));
+  assert(queries[1].includes("grantable_usage_acl.is_grantable"));
+  assert(queries[1].includes("FROM pg_default_acl AS rollup_default_acl"));
   assert(queries[1].includes("aclexplode(guarded_relation.relacl)"));
   assert(queries[1].includes("direct_acl.is_grantable"));
   assert(queries[1].includes("has_sequence_privilege"));
@@ -333,6 +336,9 @@ Deno.test("probeDbAtBoot: widened auth-audit grants reject with migration guidan
   assertStringIncludes(err.message, "openbrain_auth_rollup");
   assertStringIncludes(err.message, "db/12-auth-audit-grants.sql");
   assertStringIncludes(err.message, "db/03-grants-assertion.sql");
+  assertStringIncludes(err.message, "openbrain_readonly membership");
+  assertStringIncludes(err.message, "alternate-grantor schema grant option");
+  assertStringIncludes(err.message, "default ACL");
   assertEquals(client.releaseCalls, 1);
 });
 

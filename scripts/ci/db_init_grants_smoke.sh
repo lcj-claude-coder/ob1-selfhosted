@@ -270,6 +270,98 @@ run_assertion >/dev/null
 super_psql -v ON_ERROR_STOP=1 -c \
   "GRANT USAGE ON SCHEMA public TO PUBLIC"
 
+# PostgreSQL 16 can make a membership non-inheriting but SET-capable. Effective
+# privilege helpers then report no DELETE while the readonly login can SET ROLE
+# into the carrier and mutate audit history. Neither grant migration should
+# guess at cluster-wide membership removal; the assertion diagnoses it until an
+# operator explicitly revokes the membership.
+readonly_set_role_marker=ci-readonly-set-role-delete
+super_psql -v ON_ERROR_STOP=1 -c \
+  "CREATE ROLE ci_auth_audit_readonly_carrier NOLOGIN;
+   GRANT USAGE ON SCHEMA public TO ci_auth_audit_readonly_carrier;
+   GRANT SELECT, DELETE ON public.mcp_auth_events
+     TO ci_auth_audit_readonly_carrier;
+   GRANT ci_auth_audit_readonly_carrier TO openbrain_readonly
+     WITH INHERIT FALSE, SET TRUE;
+   INSERT INTO public.mcp_auth_events
+     (outcome, reason, middleware, path)
+   VALUES (
+     'denied', 'missing_credentials', 'require_auth',
+     '$readonly_set_role_marker'
+   )"
+super_psql -tAc \
+  "SELECT NOT has_table_privilege(
+     'openbrain_readonly', 'public.mcp_auth_events', 'DELETE'
+   )" | grep -q t
+docker exec -i -e PGPASSWORD="$OPENBRAIN_READONLY_PASSWORD" \
+  "$DB_INIT_CONTAINER" psql -X -w -v ON_ERROR_STOP=1 \
+  -h 127.0.0.1 -U openbrain_readonly -d "$POSTGRES_DB" \
+  -c "BEGIN;
+      SET LOCAL ROLE ci_auth_audit_readonly_carrier;
+      DELETE FROM public.mcp_auth_events
+        WHERE path = '$readonly_set_role_marker';
+      COMMIT"
+test "$(super_psql -tAc \
+  "SELECT count(*) FROM public.mcp_auth_events
+   WHERE path = '$readonly_set_role_marker'")" = 0
+expect_rejected "readonly SET ROLE carrier" \
+  "openbrain_readonly is a member of" \
+  "SET ROLE can bypass effective read-only privilege checks"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+expect_rejected "readonly membership survives grant migration" \
+  "openbrain_readonly is a member of" \
+  "ci_auth_audit_readonly_carrier"
+super_psql -v ON_ERROR_STOP=1 -c \
+  "REVOKE ci_auth_audit_readonly_carrier FROM openbrain_readonly;
+   DROP OWNED BY ci_auth_audit_readonly_carrier CASCADE;
+   DROP ROLE ci_auth_audit_readonly_carrier"
+run_assertion >/dev/null
+
+# Schema ACL entries retain their issuing grantor. An owner-issued ordinary row
+# can therefore coexist with an alternate grantor's WITH GRANT OPTION row; replay
+# of migration 12 must not falsely claim to have converged the latter.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "CREATE ROLE ci_auth_audit_schema_grantor NOLOGIN;
+   GRANT USAGE ON SCHEMA public TO ci_auth_audit_schema_grantor
+     WITH GRANT OPTION;
+   SET ROLE ci_auth_audit_schema_grantor;
+   GRANT USAGE ON SCHEMA public TO openbrain_auth_rollup
+     WITH GRANT OPTION;
+   RESET ROLE"
+expect_rejected "alternate-grantor rollup schema grant option" \
+  "openbrain_auth_rollup has grantable USAGE on schema public" \
+  "ci_auth_audit_schema_grantor"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+expect_rejected "alternate-grantor schema grant survives grant migration" \
+  "openbrain_auth_rollup has grantable USAGE on schema public" \
+  "REVOKE GRANT OPTION FOR USAGE"
+super_psql -v ON_ERROR_STOP=1 -c \
+  "SET ROLE ci_auth_audit_schema_grantor;
+   REVOKE ALL PRIVILEGES ON SCHEMA public
+     FROM openbrain_auth_rollup CASCADE;
+   RESET ROLE;
+   DROP OWNED BY ci_auth_audit_schema_grantor CASCADE;
+   DROP ROLE ci_auth_audit_schema_grantor"
+run_assertion >/dev/null
+
+# Default ACLs are future grants and survive the direct-object convergence in
+# migration 12. The assertion names the owning role and exact ALTER DEFAULT
+# PRIVILEGES repair instead of silently mutating another role's standing policy.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "ALTER DEFAULT PRIVILEGES
+     GRANT SELECT ON TABLES TO openbrain_auth_rollup"
+expect_rejected "rollup future-relation default ACL" \
+  "default privileges would grant future relations or sequences to openbrain_auth_rollup" \
+  "ALTER DEFAULT PRIVILEGES FOR ROLE postgres"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+expect_rejected "rollup default ACL survives grant migration" \
+  "default privileges would grant future relations or sequences to openbrain_auth_rollup" \
+  "REVOKE SELECT ON TABLES FROM openbrain_auth_rollup"
+super_psql -v ON_ERROR_STOP=1 -c \
+  "ALTER DEFAULT PRIVILEGES
+     REVOKE SELECT ON TABLES FROM openbrain_auth_rollup"
+run_assertion >/dev/null
+
 smoke_step "Smoke test — boot probe rejects auth-audit grant drift"
 run_deno_db_smoke server/auth_audit_grants_db_smoke.ts
 
@@ -541,4 +633,4 @@ docker exec "$DB_INIT_CONTAINER" rm -f "$hba_role_file"
 super_psql -tAc "SELECT pg_reload_conf()" | grep -q t
 
 run_assertion >/dev/null
-echo "protected-role assertions accepted the clean catalog and rejected auth-audit mutation/delegation/object-creation drift, session UPDATE widening, role attributes/membership, current and default PUBLIC access, PUBLIC SECURITY DEFINER execution, retired topology, and HBA drift"
+echo "protected-role assertions accepted the clean catalog and rejected auth-audit mutation/delegation/object-creation/default-ACL drift, readonly SET ROLE mutation, session UPDATE widening, role attributes/membership, current and default PUBLIC access, PUBLIC SECURITY DEFINER execution, retired topology, and HBA drift"

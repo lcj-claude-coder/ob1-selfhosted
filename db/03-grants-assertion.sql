@@ -38,10 +38,11 @@
 -- or skip/undo this check and is outside this SQL file's threat boundary.
 --
 -- Invariants checked:
---   (a) `openbrain_app` must have no role memberships and must not be a
---       superuser or hold any cluster-level privilege; `openbrain_readonly`
---       must hold BYPASSRLS for pg_dump and no other unsafe attribute; and
---       `openbrain_token_admin` must have no memberships or unsafe attributes.
+--   (a) `openbrain_app` and `openbrain_readonly` must have no role memberships;
+--       the app must not be a superuser or hold any cluster-level privilege,
+--       the read-only role must hold BYPASSRLS for pg_dump and no other unsafe
+--       attribute, and `openbrain_token_admin` must have no memberships or
+--       unsafe attributes.
 --   (b) `openbrain_app` must NOT have DELETE on `public.thoughts`.
 --   (c) `openbrain_app` MUST have SELECT and INSERT on `public.thoughts`,
 --       plus UPDATE on its content columns only — and no UPDATE (table-wide or
@@ -257,6 +258,18 @@ BEGIN
      ), false) THEN
     RAISE EXCEPTION
       'grants assertion failed: openbrain_readonly lacks BYPASSRLS required by full pg_dump under FORCE RLS.';
+  END IF;
+  SELECT string_agg(
+    roleid::regrole::text,
+    ', ' ORDER BY roleid::regrole::text
+  )
+  INTO memberships
+  FROM pg_auth_members
+  WHERE member = 'openbrain_readonly'::regrole;
+  IF memberships IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_readonly is a member of: %. It must remain standalone because SET ROLE can bypass effective read-only privilege checks. Revoke each membership explicitly, then rerun this assertion.',
+      memberships;
   END IF;
   IF has_table_privilege('openbrain_app', 'public.thoughts', 'DELETE') THEN
     RAISE EXCEPTION
@@ -622,6 +635,66 @@ BEGIN
      ) THEN
     RAISE EXCEPTION
       'grants assertion failed: openbrain_auth_rollup must have direct, non-delegable USAGE on schema public. Apply db/12-auth-audit-grants.sql.';
+  END IF;
+
+  -- ACLs are keyed by grantor as well as grantee. The ordinary owner-issued row
+  -- above can coexist with a grantable row issued by another role, so reject
+  -- every grantable direct USAGE row instead of treating one safe row as proof
+  -- that the whole schema ACL is safe.
+  SELECT string_agg(
+           schema_grant.grantor_name,
+           ', ' ORDER BY schema_grant.grantor_name
+         )
+    INTO bad
+  FROM (
+    SELECT DISTINCT usage_acl.grantor::regrole::text AS grantor_name
+    FROM pg_namespace AS usage_namespace
+    CROSS JOIN LATERAL aclexplode(usage_namespace.nspacl) AS usage_acl
+    WHERE usage_namespace.oid = to_regnamespace('public')::oid
+      AND usage_acl.grantee = rollup_oid
+      AND usage_acl.privilege_type = 'USAGE'
+      AND usage_acl.is_grantable
+  ) schema_grant;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup has grantable USAGE on schema public from grantor role(s): %. db/12-auth-audit-grants.sql cannot remove ACLs issued by another grantor. As each named grantor, run REVOKE GRANT OPTION FOR USAGE ON SCHEMA public FROM openbrain_auth_rollup CASCADE, then rerun this assertion.',
+      bad;
+  END IF;
+
+  -- A default ACL is a standing future grant, not an effective privilege on a
+  -- current object. Reject every relation/sequence default aimed at the rollup
+  -- role; db/12 cannot safely rewrite defaults owned by arbitrary cluster roles.
+  SELECT string_agg(
+           default_grant.repair,
+           '; ' ORDER BY default_grant.repair
+         )
+    INTO bad
+  FROM (
+    SELECT DISTINCT format(
+      'ALTER DEFAULT PRIVILEGES FOR ROLE %I%s REVOKE %s ON %s FROM openbrain_auth_rollup',
+      owner_role.rolname,
+      CASE
+        WHEN default_acl.defaclnamespace = 0 THEN ''
+        ELSE format(' IN SCHEMA %I', default_namespace.nspname)
+      END,
+      default_entry.privilege_type,
+      CASE default_acl.defaclobjtype
+        WHEN 'S' THEN 'SEQUENCES'
+        ELSE 'TABLES'
+      END
+    ) AS repair
+    FROM pg_default_acl AS default_acl
+    JOIN pg_roles AS owner_role ON owner_role.oid = default_acl.defaclrole
+    LEFT JOIN pg_namespace AS default_namespace
+      ON default_namespace.oid = default_acl.defaclnamespace
+    CROSS JOIN LATERAL aclexplode(default_acl.defaclacl) AS default_entry
+    WHERE default_acl.defaclobjtype IN ('r', 'S')
+      AND default_entry.grantee = rollup_oid
+  ) default_grant;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: default privileges would grant future relations or sequences to openbrain_auth_rollup. db/12-auth-audit-grants.sql does not alter defaults owned by arbitrary roles. Run the reported command(s) as a superuser or the named owner, then rerun this assertion: %.',
+      bad;
   END IF;
 
   -- Effective-privilege helpers intentionally collapse ordinary grants and
