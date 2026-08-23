@@ -283,6 +283,7 @@ order
 | 1.20.0 | `db/02-observability.sql` (re-apply; converges `mcp_auth_events` in place) | `OAUTH_ALLOWED_SUBJECTS` in `.env` **before** the container roll — fail-closed                                                               |
 | Arc B  | `db/02-observability.sql`, then `db/09-retire-corpus-funnel.sql`           | sink cutover complete; both legacy tables archived, verified, and empty; retired HBA rules removed                                           |
 | 1.22.0 | `db/10-thought-mutations.sql`                                              | superuser (table-owner SECURITY DEFINER helper; narrows the app's thoughts UPDATE to content columns); rerun `03-grants-assertion.sql` after |
+| 1.24.0 | `db/11-session-update-grants.sql`                                          | database owner; narrows session UPDATE to content columns and removes artifact UPDATE; rerun `03-grants-assertion.sql` after                 |
 
 Migration 08 is required by 1.19.0 **even when native tokens are disabled**.
 `ENABLE_NATIVE_TOKENS` gates the credential door, not the schema: the server's
@@ -317,12 +318,13 @@ version. Apply migrations before the roll, not with it.
    to them. Coordinate a sink schema/grant change through the
    [existing-sink upgrade](../ingress-qube/README.md#existing-sink-upgrade-coordinate-the-schema-and-installed-rollup)
    before its timers resume.
-6. Stop `mcp`, apply the migrations in ascending order, then run
-   `db/03-grants-assertion.sql`. It must exit 0. It reads the completed catalog,
-   so a partial migration or a widened role fails it loudly.
-7. `docker compose build mcp && docker compose up -d --no-deps mcp`. Confirm the
-   boot log names the schemas it found and the auth door you expect, then
-   `/health`.
+6. Build the replacement with `docker compose build mcp` while the current MCP
+   is still serving. Then stop `mcp`, apply the migrations in ascending order,
+   and run `db/03-grants-assertion.sql`. It must exit 0. It reads the completed
+   catalog, so a partial migration or a widened role fails it loudly; leave MCP
+   stopped on failure.
+7. `docker compose up -d --no-deps mcp`. Confirm the boot log names the schemas
+   it found and the auth door you expect, then `/health`.
 8. Verify from the outside — a real request through the public door, not only a
    local health check.
 

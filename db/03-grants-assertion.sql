@@ -18,7 +18,8 @@
 -- Putting the assertion in its own file solves both cases:
 --   1. Fresh init: the Compose/CI paths mount this source file as
 --      99-grants-assertion.sql, after every schema migration. Native
---      provisioning applies 01-, 02-, 04-, 05-, 06-, 07-, 08-, 09-, and 10-, then invokes
+--      provisioning applies 01-, 02-, 04-, 05-, 06-, 07-, 08-, 09-, 10-, and
+--      11-, then invokes
 --      this stable source path last. In both cases the assertion sees the
 --      completed catalog, so an init file that widens a protected role fails
 --      loudly.
@@ -46,24 +47,27 @@
 --       plus UPDATE on its content columns only — and no UPDATE (table-wide or
 --       per column) on workspace_id/project_id/visibility/owner_subject, so the
 --       audience-move helper is the sole application audience-change path.
---   (d) the app may read but not mutate the memory-space registry, and only
+--   (d) session UPDATE is likewise limited to refresh/status content columns;
+--       session audience/identity columns are immutable to the app, and
+--       artifacts are delete-and-reinsert only with no UPDATE privilege.
+--   (e) the app may read but not mutate the memory-space registry, and only
 --       it may execute the three reviewed memory_scope helpers (never PUBLIC).
---   (e) metadata degradation history is append-only to the app; its pending-
+--   (f) metadata degradation history is append-only to the app; its pending-
 --       delivery outbox is enqueue/consume-only, and only the singleton
 --       notification ledger is otherwise mutable.
---   (f) PUBLIC has no standing default table/sequence grant, and Funnel
+--   (g) PUBLIC has no standing default table/sequence grant, and Funnel
 --       relations, sink-only roles, and matching/unprovable HBA user tokens
 --       are absent from the corpus.
---   (g) thought revision history is append-only (SELECT/INSERT) to the app,
+--   (h) thought revision history is append-only (SELECT/INSERT) to the app,
 --       dumpable by the read-only role, under forced head-gated RLS, and the
 --       audience-move helper is a table-owner-owned, fixed-search-path
 --       SECURITY DEFINER function executable only by the app.
 --
--- The openbrain_app check is deliberately scoped to thoughts:
--- 02-observability.sql and 04-sessions.sql legitimately grant it access to
--- other application tables. The final breakout check is deliberately inverse:
--- it rejects every sink-only role and public.funnel_access_% relation rather
--- than maintaining a corpus-side allowlist for either.
+-- The openbrain_app content/audience checks are deliberately scoped to thoughts
+-- and sessions: 02-observability.sql legitimately grants it access to other
+-- application tables. The final breakout check is deliberately inverse: it
+-- rejects every sink-only role and public.funnel_access_% relation rather than
+-- maintaining a corpus-side allowlist for either.
 
 DO $$
 BEGIN
@@ -81,11 +85,125 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- PUBLIC is an effective grant to every present and future role. Check this
+-- before role-specific effective-privilege assertions so a PUBLIC grant is
+-- diagnosed at its real source instead of being misreported as drift on one
+-- managed role. Keep the current-object census name-free and
+-- role-independent: the object ACL itself is the invariant, including
+-- privilege types added by newer PostgreSQL releases. Object-specific checks
+-- below still pin the narrower positive grants for managed roles and
+-- deliberately repeat local PUBLIC negatives so each reviewed object's
+-- contract remains self-contained.
 DO $$
 DECLARE
-  app_attributes      text;
-  readonly_attributes text;
-  memberships         text;
+  bad_public_acls text;
+  bad_public_definers text;
+BEGIN
+  SELECT string_agg(exposure.description, ', ' ORDER BY exposure.description)
+    INTO bad_public_acls
+  FROM (
+    SELECT format(
+             '%I.%I=%s',
+             namespace.nspname,
+             relation.relname,
+             acl.privilege_type
+           ) AS description
+    FROM pg_class relation
+    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+    CROSS JOIN LATERAL aclexplode(
+      COALESCE(
+        relation.relacl,
+        acldefault(
+          (CASE WHEN relation.relkind = 'S' THEN 's' ELSE 'r' END)::"char",
+          relation.relowner
+        )
+      )
+    ) acl
+    WHERE namespace.nspname <> 'information_schema'
+      AND namespace.nspname !~ '^pg_'
+      AND relation.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+      AND acl.grantee = 0
+
+    UNION ALL
+
+    SELECT format(
+             '%I.%I.%I=%s',
+             namespace.nspname,
+             relation.relname,
+             attribute.attname,
+             acl.privilege_type
+           ) AS description
+    FROM pg_attribute attribute
+    JOIN pg_class relation ON relation.oid = attribute.attrelid
+    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+    CROSS JOIN LATERAL aclexplode(attribute.attacl) acl
+    WHERE namespace.nspname <> 'information_schema'
+      AND namespace.nspname !~ '^pg_'
+      AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND attribute.attnum > 0
+      AND NOT attribute.attisdropped
+      AND attribute.attacl IS NOT NULL
+      AND acl.grantee = 0
+  ) exposure;
+  IF bad_public_acls IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: PUBLIC can access current non-system relations or columns: %.',
+      bad_public_acls;
+  END IF;
+
+  -- Reviewed application SECURITY DEFINER routines have PUBLIC explicitly
+  -- revoked. An unknown definer that keeps PostgreSQL's default PUBLIC EXECUTE
+  -- grant is a real least-privilege bypass, independent of any one role name.
+  SELECT string_agg(
+           format(
+             '%I.%I(%s)',
+             namespace.nspname,
+             routine.proname,
+             pg_get_function_identity_arguments(routine.oid)
+           ),
+           ', ' ORDER BY namespace.nspname,
+                         routine.proname,
+                         pg_get_function_identity_arguments(routine.oid)
+         )
+    INTO bad_public_definers
+  FROM pg_proc routine
+  JOIN pg_namespace namespace ON namespace.oid = routine.pronamespace
+  CROSS JOIN LATERAL aclexplode(
+    COALESCE(routine.proacl, acldefault('f', routine.proowner))
+  ) acl
+  WHERE namespace.nspname <> 'information_schema'
+    AND namespace.nspname !~ '^pg_'
+    AND routine.prosecdef
+    AND acl.grantee = 0
+    AND acl.privilege_type = 'EXECUTE';
+  IF bad_public_definers IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: PUBLIC can execute non-system SECURITY DEFINER routines: %.',
+      bad_public_definers;
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$
+DECLARE
+  app_attributes                    text;
+  readonly_attributes               text;
+  memberships                       text;
+  column_name                       text;
+  unclassified_columns              text;
+  session_content_columns CONSTANT  text[] := ARRAY[
+    'session_id', 'title', 'session_date', 'goal',
+    'agent', 'agent_version', 'harness',
+    'machine', 'working_dir', 'repo_url', 'branch', 'head', 'worktree',
+    'started_at', 'last_update', 'ended_at', 'status',
+    'tags', 'linked_issues', 'related_sessions', 'next_actions', 'blockers',
+    'resume_context', 'summary', 'source', 'source_node',
+    'raw_toml', 'content_hash', 'embedding', 'updated_at'
+  ];
+  session_protected_columns CONSTANT text[] := ARRAY[
+    'id', 'workspace_id', 'project_id', 'visibility', 'owner_subject',
+    'created_at'
+  ];
 BEGIN
   SELECT concat_ws(
            ', ',
@@ -174,6 +292,70 @@ BEGIN
      OR has_column_privilege('openbrain_app', 'public.thoughts', 'created_at', 'UPDATE') THEN
     RAISE EXCEPTION
       'grants assertion failed: openbrain_app can UPDATE a thoughts audience/identity column (workspace_id, project_id, visibility, owner_subject, id, created_at); only memory_scope.move_thought may change audience.';
+  END IF;
+
+  IF to_regclass('sessions.session') IS NULL
+     OR to_regclass('sessions.artifact') IS NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: sessions schema is missing; apply db/04-sessions.sql first.';
+  END IF;
+  SELECT string_agg(attribute.attname, ', ' ORDER BY attribute.attnum)
+    INTO unclassified_columns
+  FROM pg_attribute attribute
+  WHERE attribute.attrelid = 'sessions.session'::regclass
+    AND attribute.attnum > 0
+    AND NOT attribute.attisdropped
+    AND NOT (attribute.attname = ANY (session_content_columns))
+    AND NOT (attribute.attname = ANY (session_protected_columns));
+  IF unclassified_columns IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: sessions.session has unclassified column(s): %. Classify each as content-updatable or protected in the session schema/migration grants, this assertion, and the server boot probe before deploying.',
+      unclassified_columns;
+  END IF;
+  IF NOT (
+       has_table_privilege('openbrain_app', 'sessions.session', 'SELECT')
+       AND has_table_privilege('openbrain_app', 'sessions.session', 'INSERT')
+       AND has_table_privilege('openbrain_app', 'sessions.session', 'DELETE')
+     ) THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_app is missing required SELECT/INSERT/DELETE on sessions.session.';
+  END IF;
+  IF has_table_privilege('openbrain_app', 'sessions.session', 'UPDATE') THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_app has table-wide UPDATE on sessions.session; it must be column-scoped to refresh/status fields. Apply db/11-session-update-grants.sql.';
+  END IF;
+  FOREACH column_name IN ARRAY session_content_columns LOOP
+    IF NOT has_column_privilege(
+      'openbrain_app', 'sessions.session', column_name, 'UPDATE'
+    ) THEN
+      RAISE EXCEPTION
+        'grants assertion failed: openbrain_app is missing column UPDATE on sessions.session content column %; apply db/11-session-update-grants.sql.',
+        column_name;
+    END IF;
+  END LOOP;
+  FOREACH column_name IN ARRAY session_protected_columns LOOP
+    IF has_column_privilege(
+      'openbrain_app', 'sessions.session', column_name, 'UPDATE'
+    ) THEN
+      RAISE EXCEPTION
+        'grants assertion failed: openbrain_app can UPDATE sessions.session audience/identity column %; session audience is immutable through the application.',
+        column_name;
+    END IF;
+  END LOOP;
+
+  IF NOT (
+       has_table_privilege('openbrain_app', 'sessions.artifact', 'SELECT')
+       AND has_table_privilege('openbrain_app', 'sessions.artifact', 'INSERT')
+       AND has_table_privilege('openbrain_app', 'sessions.artifact', 'DELETE')
+     ) THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_app is missing required SELECT/INSERT/DELETE on sessions.artifact.';
+  END IF;
+  IF has_any_column_privilege(
+       'openbrain_app', 'sessions.artifact', 'UPDATE'
+     ) THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_app can UPDATE sessions.artifact; artifacts must remain delete-and-reinsert only (session_pk cannot be rewritten). Apply db/11-session-update-grants.sql.';
   END IF;
 
   IF to_regclass('public.metadata_degradation_events') IS NULL
@@ -329,102 +511,6 @@ BEGIN
   ) THEN
     RAISE EXCEPTION
       'grants assertion failed: PUBLIC can access metadata degradation relations or sequence.';
-  END IF;
-END;
-$$ LANGUAGE plpgsql;
-
--- PUBLIC is an effective grant to every present and future role. Keep this
--- current-object census name-free and role-independent: the object ACL itself
--- is the invariant, including privilege types added by newer PostgreSQL
--- releases. Object-specific checks below still pin the narrower positive
--- grants for managed roles and deliberately repeat local PUBLIC negatives so
--- each reviewed object's contract remains self-contained.
-DO $$
-DECLARE
-  bad_public_acls text;
-  bad_public_definers text;
-BEGIN
-  SELECT string_agg(exposure.description, ', ' ORDER BY exposure.description)
-    INTO bad_public_acls
-  FROM (
-    SELECT format(
-             '%I.%I=%s',
-             namespace.nspname,
-             relation.relname,
-             acl.privilege_type
-           ) AS description
-    FROM pg_class relation
-    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
-    CROSS JOIN LATERAL aclexplode(
-      COALESCE(
-        relation.relacl,
-        acldefault(
-          (CASE WHEN relation.relkind = 'S' THEN 's' ELSE 'r' END)::"char",
-          relation.relowner
-        )
-      )
-    ) acl
-    WHERE namespace.nspname <> 'information_schema'
-      AND namespace.nspname !~ '^pg_'
-      AND relation.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
-      AND acl.grantee = 0
-
-    UNION ALL
-
-    SELECT format(
-             '%I.%I.%I=%s',
-             namespace.nspname,
-             relation.relname,
-             attribute.attname,
-             acl.privilege_type
-           ) AS description
-    FROM pg_attribute attribute
-    JOIN pg_class relation ON relation.oid = attribute.attrelid
-    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
-    CROSS JOIN LATERAL aclexplode(attribute.attacl) acl
-    WHERE namespace.nspname <> 'information_schema'
-      AND namespace.nspname !~ '^pg_'
-      AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
-      AND attribute.attnum > 0
-      AND NOT attribute.attisdropped
-      AND attribute.attacl IS NOT NULL
-      AND acl.grantee = 0
-  ) exposure;
-  IF bad_public_acls IS NOT NULL THEN
-    RAISE EXCEPTION
-      'grants assertion failed: PUBLIC can access current non-system relations or columns: %.',
-      bad_public_acls;
-  END IF;
-
-  -- Reviewed application SECURITY DEFINER routines have PUBLIC explicitly
-  -- revoked. An unknown definer that keeps PostgreSQL's default PUBLIC EXECUTE
-  -- grant is a real least-privilege bypass, independent of any one role name.
-  SELECT string_agg(
-           format(
-             '%I.%I(%s)',
-             namespace.nspname,
-             routine.proname,
-             pg_get_function_identity_arguments(routine.oid)
-           ),
-           ', ' ORDER BY namespace.nspname,
-                         routine.proname,
-                         pg_get_function_identity_arguments(routine.oid)
-         )
-    INTO bad_public_definers
-  FROM pg_proc routine
-  JOIN pg_namespace namespace ON namespace.oid = routine.pronamespace
-  CROSS JOIN LATERAL aclexplode(
-    COALESCE(routine.proacl, acldefault('f', routine.proowner))
-  ) acl
-  WHERE namespace.nspname <> 'information_schema'
-    AND namespace.nspname !~ '^pg_'
-    AND routine.prosecdef
-    AND acl.grantee = 0
-    AND acl.privilege_type = 'EXECUTE';
-  IF bad_public_definers IS NOT NULL THEN
-    RAISE EXCEPTION
-      'grants assertion failed: PUBLIC can execute non-system SECURITY DEFINER routines: %.',
-      bad_public_definers;
   END IF;
 END;
 $$ LANGUAGE plpgsql;

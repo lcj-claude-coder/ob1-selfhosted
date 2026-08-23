@@ -77,6 +77,11 @@ export async function probeDbAtBoot(
     const client = await pool.connect();
     try {
       await client.queryArray("SELECT 1");
+      // Keep the session UPDATE contract as one positive allowlist inside the
+      // catalog query. Every listed column must remain writable, and every
+      // other live column must remain non-writable; a future column-level grant
+      // therefore fails boot without waiting for the next standalone db/03
+      // assertion run.
       const schema = await client.queryArray<[
         boolean,
         boolean,
@@ -90,8 +95,20 @@ export async function probeDbAtBoot(
         boolean,
         boolean,
         boolean,
+        boolean,
       ]>(
-        `SELECT
+        `WITH session_update_columns(attname) AS (
+           VALUES
+             ('session_id'::text), ('title'), ('session_date'), ('goal'),
+             ('agent'), ('agent_version'), ('harness'),
+             ('machine'), ('working_dir'), ('repo_url'), ('branch'),
+             ('head'), ('worktree'), ('started_at'), ('last_update'),
+             ('ended_at'), ('status'), ('tags'), ('linked_issues'),
+             ('related_sessions'), ('next_actions'), ('blockers'),
+             ('resume_context'), ('summary'), ('source'), ('source_node'),
+             ('raw_toml'), ('content_hash'), ('embedding'), ('updated_at')
+         )
+         SELECT
            to_regclass('public.idx_thoughts_content_tsv') IS NOT NULL,
            to_regclass('public.idx_thoughts_content_trgm') IS NOT NULL,
            to_regclass('memory_scope.workspace') IS NOT NULL
@@ -285,7 +302,46 @@ export async function probeDbAtBoot(
                    WHERE polrelid = revisions.oid
                      AND polname = 'thought_revisions_app_head'
                  )
-             )`,
+             ),
+           COALESCE(
+             to_regclass('sessions.session') IS NOT NULL
+             AND to_regclass('sessions.artifact') IS NOT NULL
+             AND NOT has_table_privilege(
+               current_user, to_regclass('sessions.session'), 'UPDATE'
+             )
+             AND NOT EXISTS (
+               SELECT 1
+               FROM session_update_columns AS required
+               WHERE NOT has_column_privilege(
+                 current_user,
+                 to_regclass('sessions.session'),
+                 required.attname,
+                 'UPDATE'
+               )
+             )
+             AND NOT EXISTS (
+               SELECT 1
+               FROM pg_attribute AS live_column
+               WHERE live_column.attrelid = to_regclass('sessions.session')
+                 AND live_column.attnum > 0
+                 AND NOT live_column.attisdropped
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM session_update_columns AS allowed
+                   WHERE allowed.attname = live_column.attname::text
+                 )
+                 AND has_column_privilege(
+                   current_user,
+                   live_column.attrelid,
+                   live_column.attname,
+                   'UPDATE'
+                 )
+             )
+             AND NOT has_any_column_privilege(
+               current_user, to_regclass('sessions.artifact'), 'UPDATE'
+             ),
+             false
+           )`,
       );
       const [
         hasFtsIndex,
@@ -300,7 +356,9 @@ export async function probeDbAtBoot(
         hasNativeAccessTokenSchema,
         hasAuthAuditSchema,
         hasThoughtMutationSchema,
+        hasSessionUpdateGrants,
       ] = schema.rows[0] ?? [
+        false,
         false,
         false,
         false,
@@ -387,6 +445,19 @@ export async function probeDbAtBoot(
             `memory_scope.move_thought). Apply db/10-thought-mutations.sql as a ` +
             `PostgreSQL superuser (for example, postgres), then run ` +
             `db/03-grants-assertion.sql before starting this server version.`,
+        );
+      }
+      // Session capture never moves a row between audiences. Version 1.24.0
+      // makes that API contract a database-role invariant as well: parent
+      // UPDATE is content-column-only, and artifact reconciliation remains
+      // DELETE+INSERT with no direct re-parenting UPDATE.
+      if (!hasSessionUpdateGrants) {
+        throw new RequiredSchemaError(
+          `[db] Postgres at ${target} still has missing or widened session ` +
+            `UPDATE grants. Reconcile the historical shape with ` +
+            `db/11-session-update-grants.sql as the database owner, then run ` +
+            `db/03-grants-assertion.sql to identify any unexpected live ` +
+            `column grant before starting this server version.`,
         );
       }
       // Only reference the ledger after to_regclass proved it exists. Putting

@@ -184,8 +184,10 @@ export async function upsertSession(
   // status / embedding / session_id are COALESCE-preserved on UPDATE so an
   // omitted value keeps what's stored: a mobile-set status, an unchanged
   // embedding, or a resumable handle set by an earlier capture from a surface
-  // that exposed one. The $-positions are shared by both statements; the UPDATE
-  // appends audience fields as $30-$33 and the key as $34.
+  // that exposed one. The $-positions are shared by both statements. INSERT
+  // stamps audience fields at $30-$33; UPDATE uses those values only to pin the
+  // existing audience in its WHERE clause and appends the key as $34. Session
+  // audience is immutable through capture, and the database grant enforces it.
   const cols = [
     s.session_id, // $1  resumable handle (TEXT, nullable) — NOT the key
     s.title, // $2
@@ -279,12 +281,12 @@ export async function upsertSession(
       raw_toml = $27,
       content_hash = $28,
       embedding = COALESCE($29::vector, sessions.session.embedding),
-      workspace_id = $30,
-      project_id = $31,
-      visibility = $32::memory_scope.visibility,
-      owner_subject = $33,
       updated_at = now()
     WHERE id = $34
+      AND workspace_id = $30
+      AND project_id IS NOT DISTINCT FROM $31
+      AND visibility = $32::memory_scope.visibility
+      AND owner_subject IS NOT DISTINCT FROM $33
     RETURNING id, session_id, status,
               workspace_id, project_id, visibility`;
 

@@ -331,6 +331,18 @@ column-scoped grant, the function's definer/owner/config shape and grantee set,
 and the history table's grants and forced policy; the boot probe requires the
 function and the table.
 
+`db/11-session-update-grants.sql` closes the corresponding session-side gap.
+Session recapture addresses a row through its current exact audience and can
+replace only authorable/provenance content; `workspace_id`, `project_id`,
+`visibility`, `owner_subject`, `id`, and `created_at` are not UPDATE-capable by
+`openbrain_app`. Artifact reconciliation remains a qualified DELETE followed by
+INSERTs, so the app receives no artifact UPDATE at all—especially not on the
+audience-bearing `session_pk` parent link. The completed-catalog assertion pins
+both ACL shapes, the DB-init smoke proves direct re-scoping/re-parenting fails
+while production capture/status paths pass, and the boot probe refuses to serve
+against the historical broad grants. There is deliberately no privileged
+session-move helper today.
+
 `db/01-schema.sql` actively REVOKEs historical broad grants (idempotent, safe on
 live DBs), and `db/03-grants-assertion.sql` is a read-only **superuser** check.
 It is **G** when the trusted workflow runs it last and **D** when an operator

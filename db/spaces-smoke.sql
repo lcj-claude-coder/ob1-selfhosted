@@ -380,6 +380,70 @@ END;
 $$;
 ROLLBACK;
 
+-- RLS alone would allow a project-to-workspace re-scope when both audiences
+-- are installed. Migration 11's column grant must deny direct audience writes
+-- even in that union scope, while ordinary refresh/status columns and the
+-- artifact delete-and-reinsert reconciliation path keep working.
+BEGIN;
+SELECT
+  set_config('openbrain.workspace_id', '__spaces_smoke_team', true),
+  set_config('openbrain.project_id', 'alpha', true),
+  set_config('openbrain.principal', '', true),
+  set_config('openbrain.visibilities', 'project,workspace', true);
+DO $$
+DECLARE parent_id bigint;
+BEGIN
+  SELECT id INTO parent_id
+  FROM sessions.session
+  WHERE title = '__spaces_smoke_alpha'
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'column-scoped session UPDATE broke SELECT ... FOR UPDATE';
+  END IF;
+
+  BEGIN
+    UPDATE sessions.session
+    SET project_id = NULL, visibility = 'workspace'
+    WHERE id = parent_id;
+    RAISE EXCEPTION 'app role rewrote session audience columns directly';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    UPDATE sessions.session
+    SET workspace_id = workspace_id
+    WHERE id = parent_id;
+    RAISE EXCEPTION 'app role retained direct workspace_id UPDATE';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    UPDATE sessions.session
+    SET owner_subject = owner_subject
+    WHERE id = parent_id;
+    RAISE EXCEPTION 'app role retained direct owner_subject UPDATE';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  BEGIN
+    UPDATE sessions.artifact
+    SET session_pk = session_pk
+    WHERE session_pk = parent_id;
+    RAISE EXCEPTION 'app role retained direct artifact re-parenting UPDATE';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  UPDATE sessions.session
+  SET title = title, status = 'done', updated_at = now()
+  WHERE id = parent_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'column-scoped session content UPDATE matched no row';
+  END IF;
+
+  DELETE FROM sessions.artifact WHERE session_pk = parent_id;
+  INSERT INTO sessions.artifact (session_pk, kind, title)
+  VALUES (parent_id, 'note', '__spaces_smoke_reconciled_artifact');
+END;
+$$;
+ROLLBACK;
+
 -- ROLLBACK clears every transaction-local GUC. The same physical connection
 -- is reused below with a different audience and must not retain sensitive or
 -- principal state from the prior transaction.

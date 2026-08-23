@@ -79,6 +79,13 @@ echo "move helper source/target checks, principal-stamped ownership, dedupe conf
 # exact bound statements, jsonb stamp merge, recomputed fingerprint,
 # generated tsvector, degradation-event enqueue, and outcomes.
 run_deno_db_smoke server/thought_mutations_db_smoke.ts
+smoke_step "Smoke test — session UPDATE grants preserve production writes"
+# Reapply the ACL-only migration to exercise the existing-deployment
+# convergence path, then run both the catalog gate and the exact production
+# session query path as openbrain_app.
+apply_sql db/11-session-update-grants.sql >/dev/null
+apply_sql db/03-grants-assertion.sql >/dev/null
+run_deno_db_smoke server/session_grants_db_smoke.ts
 smoke_step "Smoke test — openbrain_readonly can run a full pg_dump"
 # The exact operation the off-box backup performs. Exits non-zero
 # with "permission denied for sequence/relation" if the read-only

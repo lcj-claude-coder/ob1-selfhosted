@@ -50,6 +50,7 @@ on:
       - "server/auth_audit.ts"
       - "server/session_search_db_smoke.ts"
       - "server/session_ordering_db_smoke.ts"
+      - "server/session_grants_db_smoke.ts"
       - "server/thought_mutations_db_smoke.ts"
       - "server/scoped_db.ts"
       - "server/scope_contract.ts"

@@ -427,21 +427,41 @@ Now run the block below from this directory with the running stack's `.env`
 present — its `COMPOSE_FILE` and `COMPOSE_PROJECT_NAME` values let each
 migration command resolve the running project (§"Start the stack"). The flag
 stays on those commands for invocation consistency; it becomes load-bearing on
-the final `build` and `up`, which render the model. The spaces migration is not
-a cheap no-op on reapplication; it rebuilds its fingerprint index each time:
+`build`, `stop`, and `up`, which render the model. Build the replacement images
+while the current MCP is still serving, then quiesce MCP before replaying
+`04-sessions.sql`: its narrowed grants are incompatible with pre-1.24 session
+recapture SQL. Leave MCP stopped if any migration or the final assertion fails.
+The block is a fail-fast subshell: `set -e` prevents `stop` after a failed build
+and prevents `up` after any failed stop, migration, or assertion. The spaces
+migration is not a cheap no-op on reapplication; it rebuilds its fingerprint
+index each time:
 
 ```bash
-docker compose --env-file .env exec -T postgres psql -U postgres -d openbrain < ../../db/02-observability.sql
-docker compose --env-file .env exec -T postgres psql -U postgres -d openbrain < ../../db/04-sessions.sql
+(
+set -e
+docker compose --env-file .env build mcp log-ingester
+docker compose --env-file .env stop mcp
+docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/02-observability.sql
+docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/04-sessions.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/05-hybrid-search.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/06-spaces.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/07-metadata-degradation.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/08-access-tokens.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/09-retire-corpus-funnel.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/10-thought-mutations.sql
+docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/11-session-update-grants.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/03-grants-assertion.sql
-docker compose --env-file .env build mcp log-ingester && docker compose --env-file .env up -d
+docker compose --env-file .env up -d
+)
 ```
+
+Upgrading to **1.24.0+**: `11-session-update-grants.sql` (database owner)
+removes table-wide session UPDATE, grants only the parent refresh/status
+columns, and removes artifact UPDATE entirely. The server boot probe refuses the
+historical grant shape; apply the migration and completed-catalog assertion
+before rolling the server. Pre-1.24 recapture SQL still assigns the protected
+audience columns and therefore fails after the grant change; the sequence above
+builds first and stops MCP before that incompatible window begins.
 
 Upgrading to **1.22.0+**: `10-thought-mutations.sql` (superuser) adds the
 append-only `thought_revisions` history and the `memory_scope.move_thought`

@@ -16,9 +16,14 @@
 -- pinned independently of OB — if EMBED_MODEL/EMBED_DIM change ),
 -- change vector(768) here AND in db/01-schema.sql together and re-embed.
 --
--- IDEMPOTENT and re-runnable: init scripts only auto-run on a fresh data dir,
--- so apply to an existing deployment manually (safe to re-run). Run it from
--- your compose project directory, invoked the way you start the stack there
+-- IDEMPOTENT and re-runnable at the catalog level: init scripts only auto-run
+-- on a fresh data dir, so apply to an existing deployment manually when
+-- required. Do not replay it while a pre-1.24 MCP is serving: this file narrows
+-- session UPDATE grants that the older recapture SQL still uses. For an
+-- upgrade, build the replacement first and quiesce MCP before this replay;
+-- follow "Upgrading an existing database/deployment" in the appropriate
+-- deploy/compose-local or deploy/compose-tailnet README. Then run it from your
+-- compose project directory, invoked the way you start the stack there
 -- (deploy/compose-tailnet/README.md §"Start the stack" gives both forms) — the
 -- exec has to resolve the same project as the running stack or it finds no
 -- container:
@@ -296,11 +301,13 @@ CREATE TRIGGER session_updated_at
 -- ---------- Grants ---------------------------------------------------------
 -- Re-runnable: REVOKE of an unheld privilege is a no-op, GRANT is idempotent.
 --
--- DELETE is granted on the sessions tables (unlike public.thoughts, where the
--- grants invariant forbids it) because session_capture reconciles artifact
--- children with a qualified delete-and-reinsert. The grants assertion in
--- 03-grants-assertion.sql checks the app role against explicit per-schema
--- allowlists, so these session-owned grants are reviewed there as a unit.
+-- DELETE remains granted because session_capture reconciles artifact children
+-- with a qualified delete-and-reinsert. UPDATE on the parent is limited to the
+-- columns the refresh/status paths write; its audience and identity columns are
+-- added later by 06-spaces.sql and therefore never enter this grant. Artifacts
+-- are not updated in place at all. 11-session-update-grants.sql converges an
+-- existing deployment to this state after the audience columns exist, and
+-- 03-grants-assertion.sql pins the completed-catalog split.
 -- Precedent: 02-observability.sql grants DML on its corpus auth-event table.
 
 -- No sequence USAGE grant is needed here: sessions.artifact.id and
@@ -311,8 +318,42 @@ CREATE TRIGGER session_updated_at
 -- nextval() under the inserter's own rights and therefore requires explicit
 -- USAGE. (Verified: `SET ROLE openbrain_app` + INSERT omitting id succeeds.)
 GRANT USAGE ON SCHEMA sessions TO openbrain_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON sessions.session  TO openbrain_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON sessions.artifact TO openbrain_app;
+GRANT SELECT, INSERT, DELETE ON sessions.session TO openbrain_app;
+REVOKE UPDATE ON sessions.session FROM openbrain_app;
+GRANT UPDATE (
+  session_id,
+  title,
+  session_date,
+  goal,
+  agent,
+  agent_version,
+  harness,
+  machine,
+  working_dir,
+  repo_url,
+  branch,
+  head,
+  worktree,
+  started_at,
+  last_update,
+  ended_at,
+  status,
+  tags,
+  linked_issues,
+  related_sessions,
+  next_actions,
+  blockers,
+  resume_context,
+  summary,
+  source,
+  source_node,
+  raw_toml,
+  content_hash,
+  embedding,
+  updated_at
+) ON sessions.session TO openbrain_app;
+GRANT SELECT, INSERT, DELETE ON sessions.artifact TO openbrain_app;
+REVOKE UPDATE ON sessions.artifact FROM openbrain_app;
 
 -- Read-only role: SELECT for ad-hoc DBeaver/psql exploration, mirroring the
 -- public-schema stance in 01-schema.sql. Default privileges preserved so
