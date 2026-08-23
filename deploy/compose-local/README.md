@@ -30,11 +30,12 @@ cp .env.example .env
 # Generate strong values and paste into .env:
 openssl rand -hex 24    # POSTGRES_PASSWORD
 openssl rand -hex 24    # OPENBRAIN_APP_PASSWORD
+openssl rand -hex 24    # OPENBRAIN_AUTH_ROLLUP_PASSWORD
 openssl rand -hex 24    # OPENBRAIN_READONLY_PASSWORD
 openssl rand -hex 24    # OPENBRAIN_TOKEN_ADMIN_PASSWORD
 ```
 
-Keep `ENABLE_NATIVE_TOKENS=true`, paste the four generated database passwords,
+Keep `ENABLE_NATIVE_TOKENS=true`, paste the five generated database passwords,
 and leave `MCP_ACCESS_KEY` empty on a new install. That static key is supported
 as a migration bridge for older clients.
 
@@ -211,6 +212,9 @@ set -e
 # is intentionally incompatible with pre-1.24 recapture SQL, so quiesce MCP
 # before replaying the database files and leave it stopped on any SQL failure.
 docker compose build mcp
+# 1.25.0+: after setting OPENBRAIN_AUTH_ROLLUP_PASSWORD in .env, provision the
+# dedicated role before replaying 02-observability.sql, which now grants to it.
+bash ../../scripts/upgrade-enable-auth-rollup-role.sh .
 docker compose stop mcp
 # 1.20.0+: converges mcp_auth_events to the allowed+denied audit shape in
 # place (idempotent). The server's boot probe refuses to start against the
@@ -244,10 +248,27 @@ docker compose exec -T postgres \
   < ../../db/11-session-update-grants.sql
 docker compose exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
+  < ../../db/12-auth-audit-grants.sql
+docker compose exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/03-grants-assertion.sql
+# The Compose-backed summary reads its credential inside this service. Recreate
+# Postgres once so the newly-added environment value reaches the container;
+# the named data volume is preserved.
+docker compose up -d --no-deps --force-recreate --wait postgres
 docker compose up -d --no-deps mcp
 )
 ```
+
+Upgrading to **1.25.0+** adds a dedicated `openbrain_auth_rollup` login for the
+auth-event report and retention pass. Set its new password, run the role helper
+while the current server is still live, then apply
+`12-auth-audit-grants.sql`. The migration removes auth-event UPDATE/DELETE from
+`openbrain_app`, grants the new role SELECT/DELETE on that table alone, and is
+safe to reapply. The boot probe and final assertion reject both the historical
+broad app grant and an over-privileged rollup role. The controlled Postgres
+recreation at the end preserves the named data volume and makes the new
+credential available to the Compose-backed summary job.
 
 Migration 09 is the Arc B corpus boundary. On an older data directory it refuses
 to drop either legacy Funnel table while it contains a row. If this database

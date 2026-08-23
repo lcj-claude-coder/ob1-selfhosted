@@ -96,6 +96,7 @@ export async function probeDbAtBoot(
         boolean,
         boolean,
         boolean,
+        boolean,
       ]>(
         `WITH session_update_columns(attname) AS (
            VALUES
@@ -285,8 +286,59 @@ export async function probeDbAtBoot(
              AND EXISTS (
                SELECT 1 FROM pg_constraint
                WHERE conrelid = to_regclass('public.mcp_auth_events')
-                 AND conname = 'mcp_auth_events_outcome_shape_check'
+               AND conname = 'mcp_auth_events_outcome_shape_check'
              ),
+           COALESCE(
+             to_regclass('public.mcp_auth_events') IS NOT NULL
+             AND has_table_privilege(
+               current_user, to_regclass('public.mcp_auth_events'), 'SELECT'
+             )
+             AND has_table_privilege(
+               current_user, to_regclass('public.mcp_auth_events'), 'INSERT'
+             )
+             AND NOT has_table_privilege(
+               current_user,
+               to_regclass('public.mcp_auth_events'),
+               'UPDATE, DELETE'
+             )
+             AND NOT has_any_column_privilege(
+               current_user,
+               to_regclass('public.mcp_auth_events'),
+               'UPDATE'
+             )
+             AND EXISTS (
+               SELECT 1
+               FROM pg_roles AS rollup
+               WHERE rollup.rolname = 'openbrain_auth_rollup'
+                 AND rollup.rolcanlogin
+                 AND NOT rollup.rolsuper
+                 AND NOT rollup.rolcreatedb
+                 AND NOT rollup.rolcreaterole
+                 AND NOT rollup.rolreplication
+                 AND NOT rollup.rolbypassrls
+                 AND has_table_privilege(
+                   rollup.oid,
+                   to_regclass('public.mcp_auth_events'),
+                   'SELECT'
+                 )
+                 AND has_table_privilege(
+                   rollup.oid,
+                   to_regclass('public.mcp_auth_events'),
+                   'DELETE'
+                 )
+                 AND NOT has_table_privilege(
+                   rollup.oid,
+                   to_regclass('public.mcp_auth_events'),
+                   'INSERT, UPDATE'
+                 )
+                 AND NOT has_any_column_privilege(
+                   rollup.oid,
+                   to_regclass('public.mcp_auth_events'),
+                   'INSERT, UPDATE'
+                 )
+             ),
+             false
+           ),
            to_regclass('public.thought_revisions') IS NOT NULL
              AND to_regprocedure(
                'memory_scope.move_thought(uuid,text,text,memory_scope.visibility,text,text)'
@@ -355,9 +407,11 @@ export async function probeDbAtBoot(
         hasMetadataDegradationSchema,
         hasNativeAccessTokenSchema,
         hasAuthAuditSchema,
+        hasAuthAuditGrants,
         hasThoughtMutationSchema,
         hasSessionUpdateGrants,
       ] = schema.rows[0] ?? [
+        false,
         false,
         false,
         false,
@@ -432,6 +486,17 @@ export async function probeDbAtBoot(
             `shape on mcp_auth_events (outcome/door/subject/token_label + the ` +
             `row-shape constraint). Re-apply db/02-observability.sql (idempotent; ` +
             `it converges the table in place) before starting this server version.`,
+        );
+      }
+      // Version 1.25.0 separates auth-event insertion from retention. The app
+      // can still read/append its audit rows, but a dedicated standalone role
+      // is the only runtime identity allowed to delete them.
+      if (!hasAuthAuditGrants) {
+        throw new RequiredSchemaError(
+          `[db] Postgres at ${target} still has missing or widened auth-audit ` +
+            `grants. Provision openbrain_auth_rollup, apply ` +
+            `db/12-auth-audit-grants.sql as the database owner, then run ` +
+            `db/03-grants-assertion.sql before starting this server version.`,
         );
       }
       // update_thought/move_thought (1.22.0) need the revision-history table

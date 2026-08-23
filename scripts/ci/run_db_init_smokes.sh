@@ -44,6 +44,7 @@ export POSTGRES_USER=postgres
 export POSTGRES_PASSWORD=ci_superuser_pw
 export OPENBRAIN_APP_PASSWORD=ci_app_pw
 export OPENBRAIN_READONLY_PASSWORD=ci_readonly_pw
+export OPENBRAIN_AUTH_ROLLUP_PASSWORD=ci_auth_rollup_pw
 export OPENBRAIN_TOKEN_ADMIN_PASSWORD=ci_token_admin_pw
 export DB_SMOKE_HOST=127.0.0.1
 export DB_SMOKE_PORT="${DB_SMOKE_PORT:-55439}"
@@ -95,6 +96,8 @@ run_preflight() {
     deno run --config server/deno.json --frozen \
       --allow-read=.github/workflows/db-init.yml \
       scripts/ci/check_db_init_paths.ts
+  run_family "auth-rollup role upgrade helper" \
+    bash scripts/ci/auth_rollup_upgrade_helper_test.sh
   run_family "Funnel monitor" bash scripts/funnel_monitor_test.sh
   run_family "encrypted backup publication" \
     bash deploy/qubes/app-qube/backup/ob1-db-backup_test.sh
@@ -132,6 +135,7 @@ start_database() {
     -p "127.0.0.1:$DB_SMOKE_PORT:5432" \
     -e POSTGRES_DB -e POSTGRES_USER -e POSTGRES_PASSWORD \
     -e OPENBRAIN_APP_PASSWORD -e OPENBRAIN_READONLY_PASSWORD \
+    -e OPENBRAIN_AUTH_ROLLUP_PASSWORD \
     -e OPENBRAIN_TOKEN_ADMIN_PASSWORD \
     -v "$GITHUB_WORKSPACE/db/00-roles.sh:/docker-entrypoint-initdb.d/00-roles.sh:ro" \
     -v "$GITHUB_WORKSPACE/db/01-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro" \
@@ -144,6 +148,7 @@ start_database() {
     -v "$GITHUB_WORKSPACE/db/09-retire-corpus-funnel.sql:/docker-entrypoint-initdb.d/09-retire-corpus-funnel.sql:ro" \
     -v "$GITHUB_WORKSPACE/db/10-thought-mutations.sql:/docker-entrypoint-initdb.d/10-thought-mutations.sql:ro" \
     -v "$GITHUB_WORKSPACE/db/11-session-update-grants.sql:/docker-entrypoint-initdb.d/11-session-update-grants.sql:ro" \
+    -v "$GITHUB_WORKSPACE/db/12-auth-audit-grants.sql:/docker-entrypoint-initdb.d/12-auth-audit-grants.sql:ro" \
     -v "$GITHUB_WORKSPACE/db/03-grants-assertion.sql:/docker-entrypoint-initdb.d/99-grants-assertion.sql:ro" \
     "$image" >/dev/null; then
     # Docker may create the named container before failing to bind its port.

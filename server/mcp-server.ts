@@ -286,7 +286,9 @@ export function createMcpServer(
     // in-qube, and loopback paths that do not traverse the Funnel edge cap.
     // 1.24.0: session recapture can update content only; database ACLs deny
     // audience changes and direct artifact re-parenting (migration 11).
-    version: "1.24.0",
+    // 1.25.0: the request-path DB role cannot update/delete auth audit rows;
+    // retention uses the separate openbrain_auth_rollup credential.
+    version: "1.25.0",
   });
 
   // ChatGPT-compatible search/fetch shapes (read-only). The standard names

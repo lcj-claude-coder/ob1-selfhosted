@@ -38,7 +38,7 @@
 #   DB_PORT            [5432]
 #   POSTGRES_DB        [openbrain; target=corpus]
 #   LOG_SINK_DB        [openbrain_logs; target=sink]
-#   OPENBRAIN_APP_PASSWORD          [required for target=corpus]
+#   OPENBRAIN_AUTH_ROLLUP_PASSWORD  [required for target=corpus]
 #   OPENBRAIN_LOGS_ROLLUP_PASSWORD  [required for target=sink]
 #   PGCONNECT_TIMEOUT  [10]
 #   PSQL_BIN           [psql; test/package override only]
@@ -46,8 +46,9 @@
 # `sink` always means summarize_funnel.sql as openbrain_logs_rollup against
 # openbrain_logs (or LOG_SINK_DB), using the log-sink compose service or an
 # absolute unix-socket DB_HOST. `corpus` always means summarize_auth_events.sql
-# as openbrain_app against openbrain (or POSTGRES_DB), using the postgres
-# compose service or a non-socket DB_HOST. Run two jobs to retain both halves.
+# as openbrain_auth_rollup against openbrain (or POSTGRES_DB), using the
+# postgres compose service or a non-socket DB_HOST. Run two jobs to retain both
+# halves.
 #
 # Idempotent: re-running on the same day atomically replaces that day's .md
 # file and re-runs the daily summary INSERT ... ON CONFLICT in postgres. A
@@ -64,12 +65,13 @@ umask 077
 # Preserve an inherited value for configuration precedence, but strip its
 # export attribute before stat or any other child process can inherit it. The
 # check is repeated after sourcing in case a hand-written env file uses export.
-export -n OPENBRAIN_APP_PASSWORD OPENBRAIN_LOGS_ROLLUP_PASSWORD \
+export -n OPENBRAIN_APP_PASSWORD OPENBRAIN_AUTH_ROLLUP_PASSWORD \
+  OPENBRAIN_LOGS_ROLLUP_PASSWORD \
   SUMMARY_ROLE_PASSWORD 2>/dev/null || true
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# The split deployment keeps the job's app-role credential in a narrow 0600
+# The split deployment keeps the job's auth-rollup credential in a narrow 0600
 # file instead of exporting the app compose .env (which also contains admin,
 # OAuth, and notification secrets). The file is optional for Compose, but the
 # target choice is mandatory in every invocation.
@@ -108,7 +110,8 @@ fi
 # The credential remains a shell variable for the direct backend, but must not
 # be inherited under its original name by mktemp, tee, docker, or the psql
 # client. The psql invocation below exports only command-scoped PGPASSWORD.
-export -n OPENBRAIN_APP_PASSWORD OPENBRAIN_LOGS_ROLLUP_PASSWORD \
+export -n OPENBRAIN_APP_PASSWORD OPENBRAIN_AUTH_ROLLUP_PASSWORD \
+  OPENBRAIN_LOGS_ROLLUP_PASSWORD \
   SUMMARY_ROLE_PASSWORD 2>/dev/null || true
 
 SUMMARY_BACKEND="${SUMMARY_BACKEND:-compose}"
@@ -137,14 +140,14 @@ case "${SUMMARY_TARGET:-}" in
     REPORT_STEM=funnel-summary
     ;;
   corpus)
-    TARGET_ROLE=openbrain_app
+    TARGET_ROLE=openbrain_auth_rollup
     TARGET_DB_ENV=POSTGRES_DB
     TARGET_DB_DEFAULT=openbrain
     TARGET_DB="${POSTGRES_DB:-$TARGET_DB_DEFAULT}"
     TARGET_SERVICE=postgres
     TARGET_SQL_BASENAME=summarize_auth_events.sql
-    TARGET_PASSWORD="${OPENBRAIN_APP_PASSWORD:-}"
-    TARGET_PASSWORD_NAME=OPENBRAIN_APP_PASSWORD
+    TARGET_PASSWORD="${OPENBRAIN_AUTH_ROLLUP_PASSWORD:-}"
+    TARGET_PASSWORD_NAME=OPENBRAIN_AUTH_ROLLUP_PASSWORD
     REPORT_STEM=auth-events-summary
     ;;
   *)
@@ -223,7 +226,8 @@ run_summary() {
         if [[ -n "$inherited_project_set" ]]; then
           export COMPOSE_PROJECT_NAME="$inherited_project"
         fi
-        export -n OPENBRAIN_APP_PASSWORD OPENBRAIN_LOGS_ROLLUP_PASSWORD \
+        export -n OPENBRAIN_APP_PASSWORD OPENBRAIN_AUTH_ROLLUP_PASSWORD \
+          OPENBRAIN_LOGS_ROLLUP_PASSWORD \
           LOG_SINK_SUPERUSER_PASSWORD OPENBRAIN_INGESTER_PASSWORD \
           OPENBRAIN_MONITOR_PASSWORD POSTGRES_PASSWORD SUMMARY_TARGET \
           2>/dev/null || true
@@ -241,8 +245,8 @@ run_summary() {
 
       # Read the already-scoped service credential inside the selected database
       # container so no password appears in host argv. The sink requires SCRAM
-      # on its socket; the corpus call still uses the app identity even where a
-      # stock local HBA happens to trust container-local connections.
+      # on its socket; the corpus call uses the dedicated auth-rollup identity
+      # even where a stock local HBA happens to trust container-local connections.
       if [[ "$TARGET_SERVICE" == "log-sink" ]]; then
         # The inner shell expands these values after Compose enters the container.
         # shellcheck disable=SC2016
@@ -255,7 +259,7 @@ run_summary() {
         # shellcheck disable=SC2016
         cat -- "$SQL_FILE" | "${compose_cmd[@]}" exec -T postgres \
           sh -eu -c \
-          'PGPASSWORD="$OPENBRAIN_APP_PASSWORD" exec psql -X -w -v ON_ERROR_STOP=1 -h /var/run/postgresql -U "$1" -d "$2" -f -' \
+          'PGPASSWORD="$OPENBRAIN_AUTH_ROLLUP_PASSWORD" exec psql -X -w -v ON_ERROR_STOP=1 -h /var/run/postgresql -U "$1" -d "$2" -f -' \
           auth-events-summary "$TARGET_ROLE" "$TARGET_DB" || return 1
       fi
       ;;
@@ -318,7 +322,7 @@ run_summary() {
 # password to host psql. Neither path uses a database superuser.
 #
 # The summary SQL is purely INSERT/DELETE/SELECT, no schema mods, and all of
-# those operations are covered by openbrain_app's grants in
+# those operations are covered by openbrain_auth_rollup's grants in
 # 02-observability.sql (and, on the sink, by openbrain_logs_rollup's in
 # db/log-sink/01-log-sink.sql).
 TMP_FILE="$(mktemp "$SUMMARY_DIR/.$REPORT_STEM-$DATESTAMP.XXXXXX")"

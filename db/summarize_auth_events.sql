@@ -31,13 +31,14 @@
 -- invoked the way you start the stack there — the exec has to resolve the
 -- same project as the running stack or it finds no container):
 --   docker compose --env-file .env exec -T postgres \
---     psql -U openbrain_app -d openbrain \
+--     psql -U openbrain_auth_rollup -d openbrain \
 --     < ../../db/summarize_auth_events.sql
 --
--- Runs as the corpus-local openbrain_app role: the DELETE and SELECT are both
--- covered by its grants in db/02-observability.sql. The Funnel half instead
--- runs as openbrain_logs_rollup inside the sink. Neither needs a superuser or
--- schema modification.
+-- Runs as the corpus-local openbrain_auth_rollup role: the DELETE and SELECT
+-- are both covered by its grants in db/02-observability.sql, while the
+-- request-path openbrain_app role cannot mutate landed rows. The Funnel half
+-- instead runs as openbrain_logs_rollup inside the sink. Neither needs a
+-- superuser or schema modification.
 
 \set ON_ERROR_STOP on
 

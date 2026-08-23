@@ -432,6 +432,8 @@ export const EXAMPLE_CONTRACTS: Readonly<
           "Compose consumes this CLI control variable before model interpolation.",
         OPENBRAIN_READONLY_PASSWORD:
           "The app qube's host-side encrypted backup job uses this corpus role.",
+        OPENBRAIN_AUTH_ROLLUP_PASSWORD:
+          "The app qube's host-side auth-event summary uses this corpus-only retention role.",
         POSTGRES_PASSWORD:
           "The app qube retains the corpus migration credential outside the MCP service environment.",
       },

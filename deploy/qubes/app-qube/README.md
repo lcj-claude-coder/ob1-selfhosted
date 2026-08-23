@@ -139,9 +139,10 @@ application and the db qube is highly contained (the runtime app role itself is
 still restricted by memory-space RLS) — see
 [`../db-qube/README.md`](../db-qube/README.md) and
 [#15](https://github.com/lcjanke2020/ob1-selfhosted/issues/15)). At runtime the
-app qube also connects as `openbrain_app` (mcp writes thoughts; the
-[daily rollup](#daily-auth-event-rollup-and-retention-host-side) summarizes and
-retires observability rows) and `openbrain_readonly` (the backup job). It does
+app qube also connects as `openbrain_app` (mcp writes thoughts and auth
+decisions), `openbrain_auth_rollup` (the
+[daily rollup](#daily-auth-event-rollup-and-retention-host-side) reports and
+retires auth events), and `openbrain_readonly` (the backup job). It does
 **not** carry the log-ingester credential — that lives only on the ingress qube.
 
 OAuth's verified `sub` supplies personal identity automatically. The seeded
@@ -179,6 +180,14 @@ loudly warned in the boot log, but not what an upgrade intends. Set it to the
 exact `sub` claim(s) to admit (Auth0 dashboard → User Management → Users →
 user_id), then roll, then verify a live client and check `mcp_auth_events` for
 the new `outcome='allowed'` rows.
+
+Server 1.25.0 requires the dedicated `openbrain_auth_rollup` login and
+`db/12-auth-audit-grants.sql`. Set `OPENBRAIN_AUTH_ROLLUP_PASSWORD`, provision
+the role before replaying the current `db/02-observability.sql`, add the two
+role-scoped loopback HBA lines shipped by the db qube, then apply migration 12
+and the final assertion. The app retains SELECT/INSERT for request-path audit
+writes but loses UPDATE/DELETE; only the dedicated role can run the report and
+bounded retention deletes.
 
 ## Upgrading an existing deployment
 
@@ -224,10 +233,10 @@ Source without `set -a`, keep it in a subshell, and build the client's
 environment rather than handing it the shell's. `env -i` starts `psql` from
 empty, so the only values it can see are the two named on that line — every
 `$DB_HOST`-style expansion happens in the parent shell before `env` runs, so the
-arguments are unaffected. The app and read-only role passwords, the model API
-keys, and the notification credentials never reach the client process, and
-nothing survives in the operator's shell once the subshell returns. This is the
-rule the backup job states in
+arguments are unaffected. The app, auth-rollup, and read-only role passwords,
+the model API keys, and the notification credentials never reach the client
+process, and nothing survives in the operator's shell once the subshell
+returns. This is the rule the backup job states in
 [`backup/backup.env.example`](backup/backup.env.example): only what the client
 needs reaches the client.
 
@@ -284,6 +293,7 @@ order
 | Arc B  | `db/02-observability.sql`, then `db/09-retire-corpus-funnel.sql`           | sink cutover complete; both legacy tables archived, verified, and empty; retired HBA rules removed                                           |
 | 1.22.0 | `db/10-thought-mutations.sql`                                              | superuser (table-owner SECURITY DEFINER helper; narrows the app's thoughts UPDATE to content columns); rerun `03-grants-assertion.sql` after |
 | 1.24.0 | `db/11-session-update-grants.sql`                                          | database owner; narrows session UPDATE to content columns and removes artifact UPDATE; rerun `03-grants-assertion.sql` after                 |
+| 1.25.0 | `db/12-auth-audit-grants.sql`                                              | first provision `openbrain_auth_rollup` and install/reload its HBA lines; rerun `03-grants-assertion.sql` after                              |
 
 Migration 08 is required by 1.19.0 **even when native tokens are disabled**.
 `ENABLE_NATIVE_TOKENS` gates the credential door, not the schema: the server's
@@ -311,7 +321,16 @@ version. Apply migrations before the roll, not with it.
    this one for compose and the rollup, the ingress qube for the Funnel monitor.
 4. Reconcile `.env` against `.env.example`. `docker compose config --quiet` is a
    cheap dry run — it fails on a missing required variable without touching the
-   running container.
+   running container. For 1.25.0+, add a fresh
+   `OPENBRAIN_AUTH_ROLLUP_PASSWORD`, install/reload the current db-qube HBA
+   snippet, and provision or rotate the role while the old MCP is still live:
+
+   ```bash
+   bash scripts/upgrade-enable-auth-rollup-role.sh deploy/qubes/app-qube
+   ```
+
+   With this topology's nonblank `DB_HOST`, the helper uses host `psql` and
+   passes only the admin and new role passwords to that client.
 5. **Install host-side consumers before replaying SQL that changes their
    contract.** The current Funnel monitor and rollup roles live only on the
    ingress qube's separate sink; corpus migrations must never recreate or grant
@@ -336,7 +355,7 @@ runs. In this split topology Postgres is not in the app compose project, so the
 shipped job uses the wrapper's explicit `postgres` backend: host `psql` connects
 to the db qube through the
 [ConnectTCP forwarder](#the-appdb-hop-qubesconnecttcp) (`DB_HOST` = this qube's
-own IP) as `openbrain_app`, the existing role whose corpus grants cover the
+own IP) as `openbrain_auth_rollup`, whose corpus grants cover only the
 auth-event report and retention deletes. The internet-adjacent ingress qube
 never receives that credential.
 
@@ -348,9 +367,9 @@ which runs [`db/summarize_funnel.sql`](../../../db/summarize_funnel.sql) there.
 Here, [`db/summarize_auth_events.sql`](../../../db/summarize_auth_events.sql)
 handles the auth-decision audit mcp writes into the corpus — reason-coded
 denials plus the per-request admission rows (1.20.0+). `SUMMARY_TARGET=corpus`
-pins the wrapper to that SQL file, `openbrain_app`, the corpus database, and a
-non-socket host; the retired free-form role/SQL knobs fail closed. The ingress
-job uses `SUMMARY_TARGET=sink` and the opposite tuple.
+pins the wrapper to that SQL file, `openbrain_auth_rollup`, the corpus database,
+and a non-socket host; the retired free-form role/SQL knobs fail closed. The
+ingress job uses `SUMMARY_TARGET=sink` and the opposite tuple.
 
 Arc B removes the old Funnel tables and roles from this cluster entirely. For an
 existing deployment, follow
@@ -386,7 +405,7 @@ mkdir -p ~/.config/systemd/user
 install -m 0755 scripts/funnel_daily_summary.sh ~/funnel_daily_summary.sh
 install -m 0644 db/summarize_auth_events.sql ~/summarize_auth_events.sql
 install -m 0600 deploy/qubes/app-qube/auth-events-summary.env.example ~/.config/auth-events-summary.env
-$EDITOR ~/.config/auth-events-summary.env  # set DB_HOST + OPENBRAIN_APP_PASSWORD
+$EDITOR ~/.config/auth-events-summary.env  # set DB_HOST + OPENBRAIN_AUTH_ROLLUP_PASSWORD
 install -d -m 0700 ~/openbrain-funnel-summaries
 install -m 0644 deploy/qubes/app-qube/auth-events-summary.service ~/.config/systemd/user/
 install -m 0644 deploy/qubes/app-qube/auth-events-summary.timer   ~/.config/systemd/user/
@@ -449,9 +468,10 @@ unit journal.
 When updating the rollup implementation, reinstall **both** the wrapper and
 `summarize_auth_events.sql` (this qube's half), then manually start the service
 once and inspect its journal before waiting for the next timer occurrence. When
-rotating `OPENBRAIN_APP_PASSWORD`, update the mode-0600 summary env at the same
-time as the app compose `.env` so the unattended job does not silently retain
-the old credential.
+rotating `OPENBRAIN_AUTH_ROLLUP_PASSWORD`, update the mode-0600 summary env at
+the same time as the app compose `.env` so the unattended job does not silently
+retain the old credential. Rotating `OPENBRAIN_APP_PASSWORD` no longer affects
+this job.
 
 ## Host firewall (custom-input; no `:8787` machinery)
 

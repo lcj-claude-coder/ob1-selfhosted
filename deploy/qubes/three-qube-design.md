@@ -168,13 +168,15 @@ wrong tool once the point is to put a VM boundary between two of them.
 - **App qube** — the MCP server (+ Ollama), from [`app-qube/`](app-qube/). mcp
   binds loopback only; the ingress qube reaches it exclusively over the
   dom0-policy-gated qubes.ConnectTCP channel. As the trusted DB control-plane it
-  holds the admin + app + readonly credentials and runs both encrypted off-box
+  holds the admin + app + auth-rollup + readonly credentials and runs both
+  encrypted off-box
   backups: the corpus dump and the bounded aggregate-only pull
   ([`app-qube/backup/`](app-qube/backup/)).
 - **DB qube** — Postgres + pgvector, **out of docker-compose**, run natively (or
   as a single container), bound to loopback only. Reached by the app qube alone
-  (the full app role, plus readonly for backups and the superuser for remote
-  admin) over the dom0-gated qubes.ConnectTCP channel; no other qube can even
+  (the full app role, auth-rollup for bounded audit retention, readonly for
+  backups, and the superuser for remote admin) over the dom0-gated
+  qubes.ConnectTCP channel; no other qube can even
   open the channel, and there is no network listener to route to.
 
 The minimum viable step, if the full split slips: get Postgres out of the

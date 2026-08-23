@@ -31,6 +31,15 @@ super_psql -v ON_ERROR_STOP=1 -tAc \
 super_psql -v ON_ERROR_STOP=1 -tAc \
   "SELECT to_regclass('native_auth.access_token') IS NOT NULL" | grep -q t
 super_psql -v ON_ERROR_STOP=1 -tAc \
+  "SELECT count(*) = 1 FROM pg_roles
+   WHERE rolname = 'openbrain_auth_rollup'
+     AND rolcanlogin
+     AND NOT rolsuper
+     AND NOT rolcreatedb
+     AND NOT rolcreaterole
+     AND NOT rolreplication
+     AND NOT rolbypassrls" | grep -q t
+super_psql -v ON_ERROR_STOP=1 -tAc \
   "SELECT COUNT(*) = 0 FROM pg_roles
    WHERE rolname IN (
      'openbrain_ingester',
@@ -86,6 +95,9 @@ smoke_step "Smoke test — session UPDATE grants preserve production writes"
 apply_sql db/11-session-update-grants.sql >/dev/null
 apply_sql db/03-grants-assertion.sql >/dev/null
 run_deno_db_smoke server/session_grants_db_smoke.ts
+smoke_step "Smoke test — auth-audit grants remain convergent"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+apply_sql db/03-grants-assertion.sql >/dev/null
 smoke_step "Smoke test — openbrain_readonly can run a full pg_dump"
 # The exact operation the off-box backup performs. Exits non-zero
 # with "permission denied for sequence/relation" if the read-only

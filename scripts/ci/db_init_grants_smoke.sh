@@ -38,6 +38,100 @@ expect_rejected() {
 # after 02-observability.sql.
 run_assertion >/dev/null
 
+# Auth-event writes and retention use separate credentials. Match the ticket's
+# SET ROLE acceptance probe directly, then prove the rollup can delete a row
+# without gaining INSERT/UPDATE or sideways corpus access.
+expect_set_role_denied() {
+  local label=$1
+  local sql=$2
+  local output
+  if output=$(super_psql -v ON_ERROR_STOP=1 -c \
+    "BEGIN; SET LOCAL ROLE openbrain_app; $sql; ROLLBACK" 2>&1); then
+    echo "::error::$label unexpectedly succeeded as openbrain_app"
+    return 1
+  fi
+  grep -Fq "permission denied for table mcp_auth_events" <<< "$output" || {
+    echo "::error::$label failed without the expected table-permission denial"
+    echo "$output"
+    return 1
+  }
+}
+
+expect_set_role_denied "auth audit UPDATE" \
+  "UPDATE public.mcp_auth_events SET path = '/tampered' WHERE false"
+expect_set_role_denied "auth audit DELETE" \
+  "DELETE FROM public.mcp_auth_events WHERE false"
+
+audit_marker=ci-auth-rollup-retention-fixture
+super_psql -v ON_ERROR_STOP=1 -c \
+  "INSERT INTO public.mcp_auth_events
+     (ts, outcome, reason, middleware, path)
+   VALUES (
+     now() - interval '31 days', 'denied', 'missing_credentials',
+     'require_auth', '$audit_marker'
+   )"
+docker exec -i -e PGPASSWORD="$OPENBRAIN_AUTH_ROLLUP_PASSWORD" \
+  "$DB_INIT_CONTAINER" psql -X -w -v ON_ERROR_STOP=1 \
+  -h 127.0.0.1 -U openbrain_auth_rollup -d "$POSTGRES_DB" \
+  -c "DELETE FROM public.mcp_auth_events WHERE path = '$audit_marker'"
+test "$(super_psql -tAc \
+  "SELECT count(*) FROM public.mcp_auth_events WHERE path = '$audit_marker'")" = 0
+
+set +e
+rollup_insert_output=$(docker exec -i \
+  -e PGPASSWORD="$OPENBRAIN_AUTH_ROLLUP_PASSWORD" "$DB_INIT_CONTAINER" \
+  psql -X -w -v ON_ERROR_STOP=1 -h 127.0.0.1 \
+  -U openbrain_auth_rollup -d "$POSTGRES_DB" -c \
+  "INSERT INTO public.mcp_auth_events
+     (outcome, reason, middleware)
+   VALUES ('denied', 'missing_credentials', 'require_auth')" 2>&1)
+rollup_insert_rc=$?
+set -e
+test "$rollup_insert_rc" -ne 0
+grep -Fq "permission denied for table mcp_auth_events" \
+  <<< "$rollup_insert_output"
+
+# The completed-catalog assertion detects privilege drift, and migration 12
+# converges both historical table DML and a hand-added column UPDATE.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT UPDATE, DELETE ON public.mcp_auth_events TO openbrain_app"
+expect_rejected "app auth-audit mutation" \
+  "openbrain_app auth audit access must be SELECT/INSERT-only" \
+  "db/12-auth-audit-grants.sql"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+run_assertion >/dev/null
+
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT UPDATE (subject) ON public.mcp_auth_events TO openbrain_app"
+expect_rejected "app auth-audit column mutation" \
+  "openbrain_app auth audit access must be SELECT/INSERT-only"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+run_assertion >/dev/null
+
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT INSERT ON public.mcp_auth_events TO openbrain_auth_rollup"
+expect_rejected "auth rollup INSERT" \
+  "openbrain_auth_rollup must have SELECT/DELETE only"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+run_assertion >/dev/null
+
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT SELECT ON public.thoughts TO openbrain_auth_rollup"
+expect_rejected "auth rollup sideways corpus access" \
+  "openbrain_auth_rollup can access non-audit relations" "public.thoughts"
+super_psql -v ON_ERROR_STOP=1 -c \
+  "REVOKE SELECT ON public.thoughts FROM openbrain_auth_rollup"
+run_assertion >/dev/null
+
+super_psql -v ON_ERROR_STOP=1 -c \
+  "ALTER ROLE openbrain_auth_rollup CREATEDB CREATEROLE REPLICATION BYPASSRLS"
+expect_rejected "auth rollup privilege flags" \
+  "openbrain_auth_rollup has unsafe role attributes" \
+  "CREATEDB, CREATEROLE, REPLICATION, BYPASSRLS"
+super_psql -v ON_ERROR_STOP=1 -c \
+  "ALTER ROLE openbrain_auth_rollup NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+run_assertion >/dev/null
+
 # Session UPDATE is intentionally narrower than the other session DML: parent
 # refresh/status columns only, and no artifact UPDATE at all. Prove the
 # completed-catalog assertion rejects both historical table-wide grants and a
@@ -289,4 +383,4 @@ docker exec "$DB_INIT_CONTAINER" rm -f "$hba_role_file"
 super_psql -tAc "SELECT pg_reload_conf()" | grep -q t
 
 run_assertion >/dev/null
-echo "protected-role assertions accepted the clean catalog and rejected session UPDATE widening, role attributes/membership, current and default PUBLIC access, PUBLIC SECURITY DEFINER execution, retired topology, and HBA drift"
+echo "protected-role assertions accepted the clean catalog and rejected auth-audit mutation/rollup drift, session UPDATE widening, role attributes/membership, current and default PUBLIC access, PUBLIC SECURITY DEFINER execution, retired topology, and HBA drift"

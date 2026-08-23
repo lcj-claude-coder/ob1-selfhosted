@@ -18,8 +18,8 @@
 -- Putting the assertion in its own file solves both cases:
 --   1. Fresh init: the Compose/CI paths mount this source file as
 --      99-grants-assertion.sql, after every schema migration. Native
---      provisioning applies 01-, 02-, 04-, 05-, 06-, 07-, 08-, 09-, 10-, and
---      11-, then invokes
+--      provisioning applies 01-, 02-, 04-, 05-, 06-, 07-, 08-, 09-, 10-,
+--      11-, and 12-, then invokes
 --      this stable source path last. In both cases the assertion sees the
 --      completed catalog, so an init file that widens a protected role fails
 --      loudly.
@@ -62,6 +62,8 @@
 --       dumpable by the read-only role, under forced head-gated RLS, and the
 --       audience-move helper is a table-owner-owned, fixed-search-path
 --       SECURITY DEFINER function executable only by the app.
+--   (i) auth-decision history is SELECT/INSERT-only to the app, while a
+--       standalone corpus rollup role has SELECT/DELETE on that table alone.
 --
 -- The openbrain_app content/audience checks are deliberately scoped to thoughts
 -- and sessions: 02-observability.sql legitimately grants it access to other
@@ -511,6 +513,167 @@ BEGIN
   ) THEN
     RAISE EXCEPTION
       'grants assertion failed: PUBLIC can access metadata degradation relations or sequence.';
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Auth-decision audit invariants. The request-path credential may append and
+-- read rows but cannot rewrite or erase them. Retention/reporting is isolated
+-- in a standalone login role with SELECT/DELETE on this one table and no
+-- sequence, corpus, or privileged-function access.
+DO $$
+DECLARE
+  audit_table oid := to_regclass('public.mcp_auth_events');
+  audit_sequence oid := to_regclass('public.mcp_auth_events_id_seq');
+  app_oid oid := to_regrole('openbrain_app');
+  readonly_oid oid := to_regrole('openbrain_readonly');
+  rollup_oid oid := to_regrole('openbrain_auth_rollup');
+  bad text;
+BEGIN
+  IF audit_table IS NULL OR audit_sequence IS NULL OR rollup_oid IS NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: auth audit table, sequence, or openbrain_auth_rollup role is missing; provision the role and apply db/12-auth-audit-grants.sql first.';
+  END IF;
+
+  SELECT concat_ws(
+    ', ',
+    CASE WHEN NOT rolcanlogin THEN 'NOLOGIN' END,
+    CASE WHEN rolsuper THEN 'SUPERUSER' END,
+    CASE WHEN rolcreatedb THEN 'CREATEDB' END,
+    CASE WHEN rolcreaterole THEN 'CREATEROLE' END,
+    CASE WHEN rolreplication THEN 'REPLICATION' END,
+    CASE WHEN rolbypassrls THEN 'BYPASSRLS' END
+  )
+    INTO bad
+  FROM pg_roles
+  WHERE oid = rollup_oid;
+  IF bad <> '' THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup has unsafe role attributes: %.',
+      bad;
+  END IF;
+
+  SELECT string_agg(
+           format(
+             '%s -> %s',
+             member::regrole::text,
+             roleid::regrole::text
+           ),
+           ', ' ORDER BY member::regrole::text, roleid::regrole::text
+         )
+    INTO bad
+  FROM pg_auth_members
+  WHERE member = rollup_oid OR roleid = rollup_oid;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup participates in role membership: %. It must remain standalone.',
+      bad;
+  END IF;
+
+  IF NOT (
+       has_table_privilege(app_oid, audit_table, 'SELECT')
+       AND has_table_privilege(app_oid, audit_table, 'INSERT')
+     ) OR has_table_privilege(
+       app_oid, audit_table,
+       'UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
+     ) OR has_any_column_privilege(
+       app_oid, audit_table, 'UPDATE, REFERENCES'
+     ) THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_app auth audit access must be SELECT/INSERT-only; apply db/12-auth-audit-grants.sql.';
+  END IF;
+  IF NOT has_sequence_privilege(app_oid, audit_sequence, 'USAGE')
+     OR has_sequence_privilege(app_oid, audit_sequence, 'SELECT, UPDATE') THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_app auth audit sequence access must be USAGE-only.';
+  END IF;
+
+  IF NOT (
+       has_table_privilege(rollup_oid, audit_table, 'SELECT')
+       AND has_table_privilege(rollup_oid, audit_table, 'DELETE')
+     ) OR has_table_privilege(
+       rollup_oid, audit_table,
+       'INSERT, UPDATE, TRUNCATE, REFERENCES, TRIGGER'
+     ) OR has_any_column_privilege(
+       rollup_oid, audit_table, 'INSERT, UPDATE, REFERENCES'
+     ) OR has_sequence_privilege(
+       rollup_oid, audit_sequence, 'USAGE, SELECT, UPDATE'
+     ) THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup must have SELECT/DELETE only on public.mcp_auth_events and no sequence access.';
+  END IF;
+
+  IF NOT has_table_privilege(readonly_oid, audit_table, 'SELECT')
+     OR has_table_privilege(
+       readonly_oid, audit_table,
+       'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
+     ) OR NOT has_sequence_privilege(
+       readonly_oid, audit_sequence, 'SELECT'
+     ) OR has_sequence_privilege(
+       readonly_oid, audit_sequence, 'USAGE, UPDATE'
+     ) THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_readonly cannot safely dump auth audit history.';
+  END IF;
+
+  -- The retention credential must not become a sideways corpus credential.
+  -- Scan every non-system relation rather than maintaining a memory-table
+  -- denylist, and reject all SECURITY DEFINER execution as well.
+  SELECT string_agg(exposed.object_name, ', ' ORDER BY exposed.object_name)
+    INTO bad
+  FROM (
+    SELECT format('%I.%I', namespace.nspname, relation.relname) AS object_name
+    FROM pg_class relation
+    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+    WHERE namespace.nspname <> 'information_schema'
+      AND namespace.nspname !~ '^pg_'
+      AND relation.oid <> audit_table
+      AND (
+        relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+        AND (
+          has_table_privilege(
+            rollup_oid, relation.oid,
+            'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
+          )
+          OR has_any_column_privilege(
+            rollup_oid, relation.oid,
+            'SELECT, INSERT, UPDATE, REFERENCES'
+          )
+        )
+        OR relation.relkind = 'S'
+          AND has_sequence_privilege(
+            rollup_oid, relation.oid, 'USAGE, SELECT, UPDATE'
+          )
+      )
+  ) exposed;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup can access non-audit relations: %.',
+      bad;
+  END IF;
+
+  SELECT string_agg(
+           format(
+             '%I.%I(%s)',
+             namespace.nspname,
+             routine.proname,
+             pg_get_function_identity_arguments(routine.oid)
+           ),
+           ', ' ORDER BY namespace.nspname,
+                         routine.proname,
+                         pg_get_function_identity_arguments(routine.oid)
+         )
+    INTO bad
+  FROM pg_proc routine
+  JOIN pg_namespace namespace ON namespace.oid = routine.pronamespace
+  WHERE namespace.nspname <> 'information_schema'
+    AND namespace.nspname !~ '^pg_'
+    AND routine.prosecdef
+    AND has_function_privilege(rollup_oid, routine.oid, 'EXECUTE');
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup can execute SECURITY DEFINER functions: %.',
+      bad;
   END IF;
 END;
 $$ LANGUAGE plpgsql;

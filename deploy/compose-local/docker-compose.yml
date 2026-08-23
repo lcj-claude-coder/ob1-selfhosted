@@ -3,7 +3,7 @@
 # Four base services (caddy is gated by `pattern-b`; the Pattern B override adds
 # a networkless log-ingester and socket-only log-sink):
 #   postgres  — Postgres 16 + pgvector, with init scripts that create the
-#               openbrain_app and openbrain_readonly roles + schema.
+#               app, auth-rollup, read-only, and token-admin roles + schema.
 #   mcp       — The Open Brain MCP server (Deno + Hono). Bound to 127.0.0.1
 #               only so the LAN can't reach it directly.
 #   caddy     — Reverse proxy in front of mcp. Single :9787 listener that
@@ -66,6 +66,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       OPENBRAIN_APP_PASSWORD: ${OPENBRAIN_APP_PASSWORD}
       OPENBRAIN_READONLY_PASSWORD: ${OPENBRAIN_READONLY_PASSWORD}
+      OPENBRAIN_AUTH_ROLLUP_PASSWORD: ${OPENBRAIN_AUTH_ROLLUP_PASSWORD}
       # Dedicated lifecycle role for native access tokens. Empty creates a
       # NOLOGIN role; set before first init to use the token-admin profile.
       OPENBRAIN_TOKEN_ADMIN_PASSWORD: ${OPENBRAIN_TOKEN_ADMIN_PASSWORD:-}
@@ -89,6 +90,7 @@ services:
       - ../../db/09-retire-corpus-funnel.sql:/docker-entrypoint-initdb.d/09-retire-corpus-funnel.sql:ro
       - ../../db/10-thought-mutations.sql:/docker-entrypoint-initdb.d/10-thought-mutations.sql:ro
       - ../../db/11-session-update-grants.sql:/docker-entrypoint-initdb.d/11-session-update-grants.sql:ro
+      - ../../db/12-auth-audit-grants.sql:/docker-entrypoint-initdb.d/12-auth-audit-grants.sql:ro
       # Keep the stable source filename, but run the catalog assertion last so
       # later/future schemas and topology invariants are covered.
       - ../../db/03-grants-assertion.sql:/docker-entrypoint-initdb.d/99-grants-assertion.sql:ro

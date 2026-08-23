@@ -20,7 +20,7 @@ disagree, the linked doc wins and the disagreement is a bug.
   boundary between it and the public edge.
 - **Credentials** — interactive OAuth client secrets, M2M service-account
   secrets held by scheduled agents, local native/static `x-brain-key`
-  credentials, six Postgres role passwords, optional Pushover/ntfy delivery
+  credentials, Postgres role passwords, optional Pushover/ntfy delivery
   credentials, and the Tailscale node identity. Blast radii: the two verifiers
   in
   [`security-model.md` § Trust boundaries](security-model.md#trust-boundaries),
@@ -28,12 +28,12 @@ disagree, the linked doc wins and the disagreement is a bug.
   notification metadata in [§ Audit layer](security-model.md#audit-layer), and
   the node identity in [`funnel-mcp-perimeter.md`](funnel-mcp-perimeter.md).
 - **Audit integrity** — Caddy's access logs, `funnel_access_log`,
-  `mcp_auth_events`, and `metadata_degradation_events`: the evidence trail of
-  what reached the doors and whether classification degraded — request metadata,
-  reason-coded auth failures, content-free classifier events, and per-write
-  door/`sub`/native-token-label attribution. It shows who knocked and what was
-  written, not every read of the store: there is no per-tool or per-row read
-  audit.
+  `mcp_auth_events`, `thought_revisions`, and `metadata_degradation_events`: the
+  evidence trail of what reached the doors and whether classification degraded
+  — request metadata, reason-coded auth failures, content-free classifier
+  events, and per-write door/`sub`/native-token-label attribution. It shows who
+  knocked and what was written, not every read of the store: there is no
+  per-tool or per-row read audit.
 
 ## Attackers and entry points
 
@@ -100,7 +100,7 @@ One line per layer; each links to its section of
   that close a credential-status side-channel; shared 1 MiB request-body caps
   before authenticated MCP or REST JSON parsing, including on direct/private
   paths that bypass the Funnel edge.
-- [**Database**](security-model.md#database-layer) — eight named role identities
+- [**Database**](security-model.md#database-layer) — nine named role identities
   across two disjoint clusters, plus forced RLS on memory rows; missing audience
   context matches nothing, the app cannot DELETE thoughts or mutate token
   lifecycle state, the token administrator cannot read memories/hashes, and the
@@ -152,6 +152,12 @@ configuration this project is built not to foreclose. The full comparison table
   SQL credential can forge transaction-local audience context; RLS protects
   normal callers and application query omissions, not a compromised MCP process.
   ([`spaces.md`](spaces.md#enforcement-and-search))
+- **Thought-revision attribution is application-trusted.** The app role cannot
+  rewrite or erase landed revision rows, but it can append fabricated history
+  or actor fields. Database-enforced provenance is deferred because custom GUCs
+  remain app-settable and a meaningful fix requires privileged mutation
+  functions/triggers plus a non-forgeable request-identity channel.
+  ([`security-model.md` § Known limitations](security-model.md#known-limitations))
 - **Configured model endpoints still see sensitive input.** Spaces do not bypass
   the embedder or classifier; choose `METADATA_FALLBACK_POLICY=off` when content
   cannot leave the network.

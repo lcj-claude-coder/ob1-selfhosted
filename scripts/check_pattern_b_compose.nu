@@ -22,6 +22,7 @@ def render-pattern-b [files: list<string>, profiles: list<string>] {
     let required = {
         POSTGRES_PASSWORD: "compose-render-superuser"
         OPENBRAIN_APP_PASSWORD: "compose-render-app"
+        OPENBRAIN_AUTH_ROLLUP_PASSWORD: "compose-render-auth-rollup"
         OPENBRAIN_READONLY_PASSWORD: "compose-render-readonly"
         OPENBRAIN_INGESTER_PASSWORD: "compose-render-ingester"
         OPENBRAIN_LOGS_ROLLUP_PASSWORD: "compose-render-rollup"

@@ -14,10 +14,10 @@
 #   openbrain_monitor       SELECT-only, one table. Likewise sink-only.
 #   openbrain_logs_rollup   DML on both observability tables, for the daily
 #                           summary + retention pass. Corpus auth-event
-#                           retention runs as openbrain_app; deliberately not reusing
-#                           that name here, so no file on the internet-facing
-#                           qube ever holds a secret called
-#                           OPENBRAIN_APP_PASSWORD.
+#                           retention runs as openbrain_auth_rollup;
+#                           deliberately not reusing that name here, so no
+#                           corpus credential is held on the internet-facing
+#                           qube.
 #   openbrain_logs_backup   SELECT-only on the aggregate table. Optional and
 #                           deliberately unable to read raw IP/user-agent rows;
 #                           a fixed qrexec service uses it for summary backup.
