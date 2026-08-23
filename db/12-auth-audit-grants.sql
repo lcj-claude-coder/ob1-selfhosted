@@ -33,7 +33,12 @@ GRANT USAGE ON SEQUENCE public.mcp_auth_events_id_seq TO openbrain_app;
 
 -- The operational credential gets only what summarize_auth_events.sql uses:
 -- SELECT for its report and DELETE for the two bounded retention statements.
--- It cannot insert or update audit rows and has no sequence access.
+-- It cannot insert or update audit rows and has no sequence access. Give it
+-- direct, non-delegable schema USAGE so hardened deployments do not depend on
+-- PostgreSQL's default PUBLIC schema ACL.
+REVOKE ALL ON SCHEMA public FROM openbrain_auth_rollup CASCADE;
+GRANT USAGE ON SCHEMA public TO openbrain_auth_rollup;
+
 REVOKE ALL ON public.mcp_auth_events
   FROM openbrain_auth_rollup CASCADE;
 REVOKE UPDATE (
@@ -80,5 +85,15 @@ BEGIN
   END LOOP;
 END;
 $auth_rollup_create$ LANGUAGE plpgsql;
+
+-- The trusted dump/exploration identity remains read-only even if a deployed
+-- catalog picked up a direct or delegated audit-object mutation grant.
+REVOKE ALL ON public.mcp_auth_events
+  FROM openbrain_readonly CASCADE;
+GRANT SELECT ON public.mcp_auth_events TO openbrain_readonly;
+REVOKE ALL ON SEQUENCE public.mcp_auth_events_id_seq
+  FROM openbrain_readonly CASCADE;
+GRANT SELECT ON SEQUENCE public.mcp_auth_events_id_seq
+  TO openbrain_readonly;
 
 COMMIT;

@@ -520,9 +520,9 @@ $$ LANGUAGE plpgsql;
 
 -- Auth-decision audit invariants. The request-path credential may append and
 -- read rows but cannot rewrite or erase them. Retention/reporting is isolated
--- in a standalone login role with non-delegable SELECT/DELETE on this one
--- table and no sequence, persistent-object, corpus, or privileged-function
--- access.
+-- in a standalone login role with direct schema USAGE plus non-delegable
+-- SELECT/DELETE on this one table and no sequence, persistent-object, corpus,
+-- or privileged-function access. The backup role stays SELECT-only.
 DO $$
 DECLARE
   audit_table oid := to_regclass('public.mcp_auth_events');
@@ -603,6 +603,25 @@ BEGIN
      ) THEN
     RAISE EXCEPTION
       'grants assertion failed: openbrain_auth_rollup must have SELECT/DELETE only on public.mcp_auth_events and no sequence access.';
+  END IF;
+
+  -- A qualified relation name still requires schema USAGE. Pin a direct,
+  -- ordinary ACL instead of accepting the default PUBLIC grant: hardened
+  -- deployments may revoke PUBLIC, and WITH GRANT OPTION would let the
+  -- retention credential delegate this prerequisite.
+  IF NOT has_schema_privilege(
+       rollup_oid, to_regnamespace('public')::oid, 'USAGE'
+     ) OR NOT EXISTS (
+       SELECT 1
+       FROM pg_namespace AS usage_namespace
+       CROSS JOIN LATERAL aclexplode(usage_namespace.nspacl) AS usage_acl
+       WHERE usage_namespace.oid = to_regnamespace('public')::oid
+         AND usage_acl.grantee = rollup_oid
+         AND usage_acl.privilege_type = 'USAGE'
+         AND NOT usage_acl.is_grantable
+     ) THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup must have direct, non-delegable USAGE on schema public. Apply db/12-auth-audit-grants.sql.';
   END IF;
 
   -- Effective-privilege helpers intentionally collapse ordinary grants and

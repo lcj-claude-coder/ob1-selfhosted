@@ -59,6 +59,16 @@ async function adminSql(sql: string): Promise<void> {
 
 async function cleanDrift(): Promise<void> {
   await adminSql(`
+    DO $cleanup$
+    BEGIN
+      IF to_regrole('ci_auth_audit_carrier') IS NOT NULL THEN
+        EXECUTE 'REVOKE ci_auth_audit_carrier FROM openbrain_app';
+        EXECUTE 'DROP OWNED BY ci_auth_audit_carrier';
+        EXECUTE 'DROP ROLE ci_auth_audit_carrier';
+      END IF;
+    END;
+    $cleanup$ LANGUAGE plpgsql;
+
     REVOKE TRUNCATE, REFERENCES, TRIGGER
       ON public.mcp_auth_events FROM openbrain_app;
     REVOKE GRANT OPTION FOR SELECT, INSERT
@@ -78,12 +88,20 @@ async function cleanDrift(): Promise<void> {
       ON public.mcp_auth_events FROM openbrain_auth_rollup CASCADE;
     REVOKE ALL
       ON SEQUENCE public.mcp_auth_events_id_seq FROM openbrain_auth_rollup;
-    REVOKE CREATE ON SCHEMA public FROM openbrain_auth_rollup CASCADE;
+    REVOKE ALL ON SCHEMA public FROM openbrain_auth_rollup CASCADE;
+    GRANT USAGE ON SCHEMA public TO openbrain_auth_rollup;
     REVOKE CREATE ON DATABASE openbrain FROM openbrain_auth_rollup CASCADE;
     REVOKE SELECT ON public.thoughts FROM openbrain_auth_rollup;
     REVOKE EXECUTE ON FUNCTION ${privilegedMutation}
       FROM openbrain_auth_rollup;
     REVOKE openbrain_readonly FROM openbrain_auth_rollup;
+
+    REVOKE ALL ON public.mcp_auth_events FROM openbrain_readonly CASCADE;
+    GRANT SELECT ON public.mcp_auth_events TO openbrain_readonly;
+    REVOKE ALL ON SEQUENCE public.mcp_auth_events_id_seq
+      FROM openbrain_readonly CASCADE;
+    GRANT SELECT ON SEQUENCE public.mcp_auth_events_id_seq
+      TO openbrain_readonly;
   `);
 }
 
@@ -152,6 +170,35 @@ const driftCases: DriftCase[] = [
       "REVOKE GRANT OPTION FOR USAGE ON SEQUENCE public.mcp_auth_events_id_seq FROM openbrain_app CASCADE",
   },
   {
+    label: "application role membership",
+    introduce: `
+      CREATE ROLE ci_auth_audit_carrier
+        NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE
+        NOREPLICATION NOBYPASSRLS;
+      GRANT SELECT, INSERT ON public.mcp_auth_events
+        TO ci_auth_audit_carrier WITH GRANT OPTION;
+      GRANT USAGE ON SEQUENCE public.mcp_auth_events_id_seq
+        TO ci_auth_audit_carrier WITH GRANT OPTION;
+      GRANT ci_auth_audit_carrier TO openbrain_app
+    `,
+    repair: `
+      REVOKE ci_auth_audit_carrier FROM openbrain_app;
+      DROP OWNED BY ci_auth_audit_carrier;
+      DROP ROLE ci_auth_audit_carrier
+    `,
+  },
+  {
+    label: "readonly audit DELETE",
+    introduce: "GRANT DELETE ON public.mcp_auth_events TO openbrain_readonly",
+    repair: "REVOKE DELETE ON public.mcp_auth_events FROM openbrain_readonly",
+  },
+  {
+    label: "missing direct rollup schema USAGE",
+    introduce:
+      "REVOKE USAGE ON SCHEMA public FROM openbrain_auth_rollup CASCADE",
+    repair: "GRANT USAGE ON SCHEMA public TO openbrain_auth_rollup",
+  },
+  {
     label: "rollup schema creation",
     introduce: "GRANT CREATE ON SCHEMA public TO openbrain_auth_rollup",
     repair: "REVOKE CREATE ON SCHEMA public FROM openbrain_auth_rollup CASCADE",
@@ -188,19 +235,41 @@ const driftCases: DriftCase[] = [
   },
 ];
 
-await cleanDrift();
 try {
+  await cleanDrift();
+  // Harden the disposable catalog for the whole run. The rollup's qualified
+  // audit query must work because of its direct USAGE grant, not because of
+  // PostgreSQL's default PUBLIC schema ACL.
+  await adminSql("REVOKE USAGE ON SCHEMA public FROM PUBLIC");
   await probeDbAtBoot(appPool, target);
+  await withAdmin(async (client) => {
+    await client.queryArray("BEGIN");
+    try {
+      await client.queryArray("SET LOCAL ROLE openbrain_auth_rollup");
+      await client.queryArray(
+        "SELECT count(*) FROM public.mcp_auth_events",
+      );
+    } finally {
+      await client.queryArray("ROLLBACK");
+    }
+  });
   for (const drift of driftCases) {
     await expectBootRefusal(drift);
     console.log(`auth-audit boot grant smoke rejected ${drift.label}`);
   }
 } finally {
-  await cleanDrift();
-  await appPool.end();
-  await adminPool.end();
+  try {
+    await cleanDrift();
+  } finally {
+    try {
+      await adminSql("GRANT USAGE ON SCHEMA public TO PUBLIC");
+    } finally {
+      await appPool.end();
+      await adminPool.end();
+    }
+  }
 }
 
 console.log(
-  "auth-audit boot grant smoke: exact app and standalone rollup boundaries passed",
+  "auth-audit boot grant smoke: app, readonly, and standalone rollup boundaries passed",
 );

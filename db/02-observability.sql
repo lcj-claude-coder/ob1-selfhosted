@@ -182,7 +182,11 @@ GRANT USAGE ON SEQUENCE mcp_auth_events_id_seq TO openbrain_app;
 
 -- Retention and the daily report use a separate, non-application credential.
 -- It can inspect and delete auth events, but cannot fabricate or rewrite one
--- and has no need for the BIGSERIAL sequence.
+-- and has no need for the BIGSERIAL sequence. Give it direct, non-delegable
+-- schema USAGE so the job does not depend on PostgreSQL's default PUBLIC ACL.
+REVOKE ALL ON SCHEMA public FROM openbrain_auth_rollup CASCADE;
+GRANT USAGE ON SCHEMA public TO openbrain_auth_rollup;
+
 REVOKE ALL ON mcp_auth_events FROM openbrain_auth_rollup CASCADE;
 REVOKE UPDATE (
   id, ts, outcome, reason, middleware, door, subject, token_label,
@@ -224,5 +228,8 @@ $auth_rollup_create$ LANGUAGE plpgsql;
 -- (01-schema.sql also grants future public sequences via ALTER DEFAULT
 -- PRIVILEGES, but that only fires for objects created by the role that ran it;
 -- these explicit grants don't depend on the creating role.)
+REVOKE ALL ON mcp_auth_events FROM openbrain_readonly CASCADE;
 GRANT SELECT ON mcp_auth_events TO openbrain_readonly;
+REVOKE ALL ON SEQUENCE mcp_auth_events_id_seq
+  FROM openbrain_readonly CASCADE;
 GRANT SELECT ON SEQUENCE mcp_auth_events_id_seq TO openbrain_readonly;

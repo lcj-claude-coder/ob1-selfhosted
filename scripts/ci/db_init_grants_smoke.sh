@@ -154,6 +154,47 @@ super_psql -tAc \
    )" | grep -q t
 run_assertion >/dev/null
 
+# The readonly role is part of the same audit boundary: both supported grant
+# files must remove direct mutation/sequence drift, not merely rely on a
+# rollup-grant cascade to happen to clean it up.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT DELETE ON public.mcp_auth_events TO openbrain_readonly;
+   GRANT USAGE ON SEQUENCE public.mcp_auth_events_id_seq
+     TO openbrain_readonly"
+expect_rejected "readonly auth-audit mutation" \
+  "openbrain_readonly cannot safely dump auth audit history"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+super_psql -tAc \
+  "SELECT has_table_privilege(
+            'openbrain_readonly', 'public.mcp_auth_events', 'SELECT'
+          )
+      AND NOT has_table_privilege(
+            'openbrain_readonly', 'public.mcp_auth_events',
+            'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
+          )
+      AND has_sequence_privilege(
+            'openbrain_readonly', 'public.mcp_auth_events_id_seq', 'SELECT'
+          )
+      AND NOT has_sequence_privilege(
+            'openbrain_readonly', 'public.mcp_auth_events_id_seq',
+            'USAGE, UPDATE'
+          )" | grep -q t
+run_assertion >/dev/null
+
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT DELETE ON public.mcp_auth_events TO openbrain_readonly;
+   GRANT USAGE ON SEQUENCE public.mcp_auth_events_id_seq
+     TO openbrain_readonly"
+apply_sql db/02-observability.sql >/dev/null
+super_psql -tAc \
+  "SELECT NOT has_table_privilege(
+            'openbrain_readonly', 'public.mcp_auth_events', 'DELETE'
+          )
+      AND NOT has_sequence_privilege(
+            'openbrain_readonly', 'public.mcp_auth_events_id_seq', 'USAGE'
+          )" | grep -q t
+run_assertion >/dev/null
+
 super_psql -v ON_ERROR_STOP=1 -c \
   "GRANT SELECT (subject) ON public.mcp_auth_events
      TO openbrain_app WITH GRANT OPTION"
@@ -190,6 +231,44 @@ expect_rejected "auth rollup database CREATE" \
   "database $POSTGRES_DB"
 apply_sql db/12-auth-audit-grants.sql >/dev/null
 run_assertion >/dev/null
+
+# A hardened cluster may revoke the default PUBLIC schema USAGE. The rollup
+# must retain a direct, non-delegable prerequisite grant, and both the focused
+# migration and the idempotent observability schema must restore it.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "REVOKE USAGE ON SCHEMA public FROM PUBLIC;
+   REVOKE USAGE ON SCHEMA public FROM openbrain_auth_rollup CASCADE"
+expect_rejected "missing direct auth-rollup schema USAGE" \
+  "openbrain_auth_rollup must have direct, non-delegable USAGE on schema public" \
+  "db/12-auth-audit-grants.sql"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+super_psql -tAc \
+  "SELECT has_schema_privilege(
+            'openbrain_auth_rollup', 'public', 'USAGE'
+          )
+      AND EXISTS (
+            SELECT 1
+            FROM pg_namespace AS namespace
+            CROSS JOIN LATERAL aclexplode(namespace.nspacl) AS acl
+            WHERE namespace.nspname = 'public'
+              AND acl.grantee = 'openbrain_auth_rollup'::regrole::oid
+              AND acl.privilege_type = 'USAGE'
+              AND NOT acl.is_grantable
+          )" | grep -q t
+docker exec -i -e PGPASSWORD="$OPENBRAIN_AUTH_ROLLUP_PASSWORD" \
+  "$DB_INIT_CONTAINER" psql -X -w -v ON_ERROR_STOP=1 \
+  -h 127.0.0.1 -U openbrain_auth_rollup -d "$POSTGRES_DB" \
+  -c "SELECT count(*) FROM public.mcp_auth_events" >/dev/null
+run_assertion >/dev/null
+
+super_psql -v ON_ERROR_STOP=1 -c \
+  "REVOKE USAGE ON SCHEMA public FROM openbrain_auth_rollup CASCADE"
+expect_rejected "missing auth-rollup schema USAGE before observability replay" \
+  "openbrain_auth_rollup must have direct, non-delegable USAGE on schema public"
+apply_sql db/02-observability.sql >/dev/null
+run_assertion >/dev/null
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT USAGE ON SCHEMA public TO PUBLIC"
 
 smoke_step "Smoke test — boot probe rejects auth-audit grant drift"
 run_deno_db_smoke server/auth_audit_grants_db_smoke.ts

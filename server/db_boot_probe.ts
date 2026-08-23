@@ -289,8 +289,9 @@ export async function probeDbAtBoot(
                AND conname = 'mcp_auth_events_outcome_shape_check'
              ),
            -- Mirror db/03's security-relevant auth-audit boundary at boot:
-           -- exact non-delegable app table/sequence rights and a standalone
-           -- rollup with no persistent-object, sideways relation, sequence,
+           -- exact non-delegable app table/sequence rights, a SELECT-only
+           -- backup role, and a standalone rollup with direct schema USAGE
+           -- but no persistent-object, sideways relation, sequence,
            -- membership, or definer-function path.
            COALESCE(
              to_regclass('public.mcp_auth_events') IS NOT NULL
@@ -321,6 +322,42 @@ export async function probeDbAtBoot(
                to_regclass('public.mcp_auth_events_id_seq'),
                'SELECT, UPDATE'
              )
+             AND NOT EXISTS (
+               SELECT 1
+               FROM pg_auth_members AS application_membership
+               WHERE application_membership.member =
+                     to_regrole(current_user)::oid
+             )
+             AND EXISTS (
+               SELECT 1
+               FROM pg_roles AS readonly
+               WHERE readonly.rolname = 'openbrain_readonly'
+                 AND has_table_privilege(
+                   readonly.oid,
+                   to_regclass('public.mcp_auth_events'),
+                   'SELECT'
+                 )
+                 AND NOT has_table_privilege(
+                   readonly.oid,
+                   to_regclass('public.mcp_auth_events'),
+                   'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
+                 )
+                 AND NOT has_any_column_privilege(
+                   readonly.oid,
+                   to_regclass('public.mcp_auth_events'),
+                   'INSERT, UPDATE, REFERENCES'
+                 )
+                 AND has_sequence_privilege(
+                   readonly.oid,
+                   to_regclass('public.mcp_auth_events_id_seq'),
+                   'SELECT'
+                 )
+                 AND NOT has_sequence_privilege(
+                   readonly.oid,
+                   to_regclass('public.mcp_auth_events_id_seq'),
+                   'USAGE, UPDATE'
+                 )
+             )
              AND EXISTS (
                SELECT 1
                FROM pg_roles AS rollup
@@ -336,6 +373,22 @@ export async function probeDbAtBoot(
                    FROM pg_auth_members AS membership
                    WHERE membership.member = rollup.oid
                       OR membership.roleid = rollup.oid
+                 )
+                 AND has_schema_privilege(
+                   rollup.oid,
+                   to_regnamespace('public')::oid,
+                   'USAGE'
+                 )
+                 AND EXISTS (
+                   SELECT 1
+                   FROM pg_namespace AS usage_namespace
+                   CROSS JOIN LATERAL
+                     aclexplode(usage_namespace.nspacl) AS usage_acl
+                   WHERE usage_namespace.oid =
+                         to_regnamespace('public')::oid
+                     AND usage_acl.grantee = rollup.oid
+                     AND usage_acl.privilege_type = 'USAGE'
+                     AND NOT usage_acl.is_grantable
                  )
                  AND has_table_privilege(
                    rollup.oid,
