@@ -4,10 +4,12 @@
 // whichever auth doors the deployment enabled — native/static x-brain-key
 // (compose-local) and/or an Auth0 RS256 Bearer JWT (the OAuth door used by the
 // Funnel + Qubes deployments). On a publicly reachable deployment Caddy fronts
-// the server (the Anthropic IP allowlist, body cap, access logging with
-// credential redaction) but does not strip credentials per branch — the server
-// accepts only the door(s) the deployment enabled, so `requireAuth` is the
-// load-bearing check and works equally well behind a single-port deployment.
+// the server (the Anthropic IP allowlist, pre-auth Funnel body cap, access
+// logging with credential redaction) but does not strip credentials per branch
+// — the server accepts only the door(s) the deployment enabled, so `requireAuth`
+// is the load-bearing check and works equally well behind a single-port
+// deployment. The server independently caps authenticated MCP bodies so direct
+// tailnet/in-qube/loopback callers cannot bypass the memory bound.
 // Storage: vanilla Postgres + pgvector (no @supabase/supabase-js, no auth.uid).
 // Embeddings: local Ollama (default model nomic-embed-text, 768 dim).
 //
@@ -67,6 +69,7 @@ import {
 } from "./metadata_notifications.ts";
 import { pingDb } from "./queries.ts";
 import { readinessResponse } from "./readiness.ts";
+import { mcpRequestBodyLimit } from "./request_body_limit.ts";
 
 // Hono Variables typed so `c.set/c.get` on door/sub/tokenLabel are checked
 // at the boundaries (requireAuth sets, /mcp + / handlers get). Without
@@ -146,7 +149,10 @@ function authContextOr500(c: Context<{ Variables: AppVariables }>):
   return auth;
 }
 
-app.all("/mcp", requireRequestAuth, async (c) => {
+// Order is deliberate: failed auth keeps its separately bounded body reader
+// for JSON-RPC id correlation, while admitted requests hit the 1 MiB transport
+// cap before @hono/mcp can buffer and parse the body.
+app.all("/mcp", requireRequestAuth, mcpRequestBodyLimit, async (c) => {
   const auth = authContextOr500(c);
   if (auth instanceof Response) return auth;
   const transport = new StreamableHTTPTransport();
@@ -157,7 +163,7 @@ app.all("/mcp", requireRequestAuth, async (c) => {
 
 // Backward-compat: also serve the MCP transport at the root for clients
 // that don't add /mcp to the URL.
-app.all("/", requireRequestAuth, async (c) => {
+app.all("/", requireRequestAuth, mcpRequestBodyLimit, async (c) => {
   const auth = authContextOr500(c);
   if (auth instanceof Response) return auth;
   const transport = new StreamableHTTPTransport();

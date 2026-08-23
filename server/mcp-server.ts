@@ -281,7 +281,10 @@ export function createMcpServer(
     // an explicit workspace/project/visibility (personal owner = the caller's
     // own verified principal); both snapshot the prior state to the
     // head-gated thought_revisions history. Requires db/10-thought-mutations.sql.
-    version: "1.22.0",
+    // 1.23.0: authenticated MCP requests at /mcp and / reject bodies over
+    // 1 MiB before @hono/mcp buffers/parses JSON, including direct tailnet,
+    // in-qube, and loopback paths that do not traverse the Funnel edge cap.
+    version: "1.23.0",
   });
 
   // ChatGPT-compatible search/fetch shapes (read-only). The standard names

@@ -25,11 +25,12 @@
 # headers join with commas and still match. See PR description for the
 # full test matrix.
 #
-# The funnel-only request_body cap is scoped via named-matcher directive
-# form (`request_body @funnel { ... }`) so the tailnet branch is unaffected
-# by the funnel-only DoS-amp cap. Credentials are NOT stripped per-branch:
-# the access-log `format filter` redacts them on disk, and the server
-# decides per-deployment which auth door (x-brain-key / OAuth) it accepts.
+# The funnel-only edge request_body cap is scoped via named-matcher directive
+# form (`request_body @funnel { ... }`) so the tailnet branch is unaffected at
+# Caddy. The server separately caps authenticated MCP and REST bodies, including
+# tailnet-direct requests. Credentials are NOT stripped per-branch: the
+# access-log `format filter` redacts them on disk, and the server decides per
+# deployment which auth door (x-brain-key / OAuth) it accepts.
 #
 # Per-branch access logs are routed via Caddy's `log_name` directive
 # inside each handle — funnel-originated requests land in
@@ -169,8 +170,8 @@
 	#    default body cap.
 	# Applied to BOTH funnel branches via the @funnel matcher so an
 	# attacker DoS-amp'ing a 100MB POST from a non-Anthropic IP gets
-	# capped BEFORE we 403. Not applied to tailnet (preserves the
-	# earlier no-cap-on-tailnet behavior).
+	# capped BEFORE we 403. Not applied to tailnet at this edge; the backend
+	# independently caps authenticated MCP and REST bodies at 1 MiB.
 	request_body @funnel {
 		max_size 1MB
 	}

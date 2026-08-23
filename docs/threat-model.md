@@ -97,7 +97,9 @@ One line per layer; each links to its section of
 - [**Application**](security-model.md#application-layer) — refuses to boot with
   no auth door; fresh hash/revocation lookup for native tokens;
   pinned-everything JWT validation; boot-time JWKS probe; shaped auth failures
-  that close a credential-status side-channel.
+  that close a credential-status side-channel; shared 1 MiB request-body caps
+  before authenticated MCP or REST JSON parsing, including on direct/private
+  paths that bypass the Funnel edge.
 - [**Database**](security-model.md#database-layer) — eight named role identities
   across two disjoint clusters, plus forced RLS on memory rows; missing audience
   context matches nothing, the app cannot DELETE thoughts or mutate token

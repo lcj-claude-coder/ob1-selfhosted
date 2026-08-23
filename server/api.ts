@@ -58,14 +58,13 @@ import {
   UpstreamError,
   ValidationError,
 } from "./services.ts";
+import { MAX_REQUEST_BODY_BYTES } from "./request_body_limit.ts";
 
-// Cap REST bodies at 1 MiB — parity with the funnel-only request_body cap in
-// the Caddyfile, and a real bound for tailnet-direct callers who have no edge
-// in front of them (c.req.json() would otherwise buffer unbounded bodies
-// before Zod ever runs). Far above the 100k UTF-8 content cap, so no
-// legitimate request gets near it.
-const MAX_BODY_BYTES = 1024 * 1024;
-
+// Cap REST bodies at the shared 1 MiB application limit — parity with MCP and
+// the funnel-only request_body cap in the Caddyfile, and a real bound for
+// tailnet-direct callers who have no edge in front of them (c.req.json() would
+// otherwise buffer unbounded bodies before Zod ever runs). Far above the 100k
+// UTF-8 content cap, so no legitimate request gets near it.
 type ApiContext = Context<{ Variables: AppVariables }>;
 
 function errorJson(
@@ -167,13 +166,13 @@ export function createApiRouter(
   api.use(
     "*",
     bodyLimit({
-      maxSize: MAX_BODY_BYTES,
+      maxSize: MAX_REQUEST_BODY_BYTES,
       onError: (c) =>
         errorJson(
           c as ApiContext,
           413,
           "payload_too_large",
-          `request body exceeds ${MAX_BODY_BYTES} bytes`,
+          `request body exceeds ${MAX_REQUEST_BODY_BYTES} bytes`,
         ),
     }),
   );
