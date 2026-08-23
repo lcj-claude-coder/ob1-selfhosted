@@ -318,12 +318,13 @@ version. Apply migrations before the roll, not with it.
    to them. Coordinate a sink schema/grant change through the
    [existing-sink upgrade](../ingress-qube/README.md#existing-sink-upgrade-coordinate-the-schema-and-installed-rollup)
    before its timers resume.
-6. Stop `mcp`, apply the migrations in ascending order, then run
-   `db/03-grants-assertion.sql`. It must exit 0. It reads the completed catalog,
-   so a partial migration or a widened role fails it loudly.
-7. `docker compose build mcp && docker compose up -d --no-deps mcp`. Confirm the
-   boot log names the schemas it found and the auth door you expect, then
-   `/health`.
+6. Build the replacement with `docker compose build mcp` while the current MCP
+   is still serving. Then stop `mcp`, apply the migrations in ascending order,
+   and run `db/03-grants-assertion.sql`. It must exit 0. It reads the completed
+   catalog, so a partial migration or a widened role fails it loudly; leave MCP
+   stopped on failure.
+7. `docker compose up -d --no-deps mcp`. Confirm the boot log names the schemas
+   it found and the auth door you expect, then `/health`.
 8. Verify from the outside — a real request through the public door, not only a
    local health check.
 

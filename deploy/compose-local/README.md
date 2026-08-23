@@ -201,6 +201,11 @@ older, update the pinned pgvector image/package and run
 `ALTER EXTENSION vector UPDATE;` before the migration:
 
 ```bash
+# Build the replacement while the current MCP is still serving. Migration 11
+# is intentionally incompatible with pre-1.24 recapture SQL, so quiesce MCP
+# before replaying the database files and leave it stopped on any SQL failure.
+docker compose build mcp
+docker compose stop mcp
 # 1.20.0+: converges mcp_auth_events to the allowed+denied audit shape in
 # place (idempotent). The server's boot probe refuses to start against the
 # old denied-only shape, so skipping this step turns the container roll
@@ -234,7 +239,6 @@ docker compose exec -T postgres \
 docker compose exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/03-grants-assertion.sql
-docker compose build mcp
 docker compose up -d --no-deps mcp
 ```
 

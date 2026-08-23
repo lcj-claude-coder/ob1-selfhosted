@@ -72,6 +72,17 @@ expect_rejected "artifact parent-link UPDATE" \
 apply_sql db/11-session-update-grants.sql >/dev/null
 run_assertion >/dev/null
 
+# A future session column must be deliberately classified before deployment;
+# otherwise the catalog gate should fail instead of leaving the first new write
+# to discover a missing or over-broad grant at runtime.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "ALTER TABLE sessions.session ADD COLUMN ci_unclassified text"
+expect_rejected "unclassified session column" \
+  "sessions.session has unclassified column(s)" "ci_unclassified"
+super_psql -v ON_ERROR_STOP=1 -c \
+  "ALTER TABLE sessions.session DROP COLUMN ci_unclassified"
+run_assertion >/dev/null
+
 # HBA introspection is superuser-restricted. A lower-privilege caller
 # gets the documented diagnostic before any partial catalog check.
 set +e
@@ -148,6 +159,29 @@ expect_rejected "current PUBLIC column privilege" \
   "public.mcp_auth_events.subject=SELECT"
 super_psql -v ON_ERROR_STOP=1 -c \
   "REVOKE SELECT (subject) ON public.mcp_auth_events FROM PUBLIC"
+
+# PUBLIC grants on a relation with a narrower app-role contract must still be
+# diagnosed as PUBLIC exposure, not as app-role drift that migration 11 cannot
+# repair. Prove both table- and audience-column-level overlap.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT UPDATE ON sessions.session TO PUBLIC"
+expect_rejected "PUBLIC session table UPDATE" \
+  "PUBLIC can access current non-system relations or columns" \
+  "sessions.session=UPDATE"
+apply_sql db/11-session-update-grants.sql >/dev/null
+expect_rejected "PUBLIC session table UPDATE survives migration 11" \
+  "PUBLIC can access current non-system relations or columns" \
+  "sessions.session=UPDATE"
+super_psql -v ON_ERROR_STOP=1 -c \
+  "REVOKE UPDATE ON sessions.session FROM PUBLIC"
+
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT UPDATE (owner_subject) ON sessions.session TO PUBLIC"
+expect_rejected "PUBLIC session audience-column UPDATE" \
+  "PUBLIC can access current non-system relations or columns" \
+  "sessions.session.owner_subject=UPDATE"
+super_psql -v ON_ERROR_STOP=1 -c \
+  "REVOKE UPDATE (owner_subject) ON sessions.session FROM PUBLIC"
 
 super_psql -v ON_ERROR_STOP=1 -c \
   "GRANT USAGE ON SEQUENCE public.thought_revisions_id_seq TO PUBLIC"
