@@ -167,9 +167,63 @@ CREATE INDEX IF NOT EXISTS idx_mcp_auth_events_reason_ts ON mcp_auth_events (rea
 CREATE INDEX IF NOT EXISTS idx_mcp_auth_events_outcome_ts ON mcp_auth_events (outcome, ts DESC);
 
 -- ---------- Grants ---------------------------------------------------------
--- openbrain_app writes auth decisions and runs their retention/report query.
-GRANT SELECT, INSERT, UPDATE, DELETE ON mcp_auth_events TO openbrain_app;
+-- The request-path role can append and inspect auth decisions, but cannot
+-- rewrite or erase its own audit trail. REVOKE first so reapplying this
+-- idempotent schema converges the historical broad-DML grant too.
+REVOKE ALL ON mcp_auth_events FROM openbrain_app CASCADE;
+REVOKE UPDATE (
+  id, ts, outcome, reason, middleware, door, subject, token_label,
+  client_ip, path, inserted_at
+) ON mcp_auth_events FROM openbrain_app;
+GRANT SELECT, INSERT ON mcp_auth_events TO openbrain_app;
+
+REVOKE ALL ON SEQUENCE mcp_auth_events_id_seq FROM openbrain_app CASCADE;
 GRANT USAGE ON SEQUENCE mcp_auth_events_id_seq TO openbrain_app;
+
+-- Retention and the daily report use a separate, non-application credential.
+-- It can inspect and delete auth events, but cannot fabricate or rewrite one
+-- and has no need for the BIGSERIAL sequence. Give it direct, non-delegable
+-- schema USAGE so the job does not depend on PostgreSQL's default PUBLIC ACL.
+-- This owner-issued convergence cannot safely revoke schema ACLs issued by a
+-- different grantor or default ACLs owned by arbitrary roles; the final grants
+-- assertion reports those sources with explicit repair guidance.
+REVOKE ALL ON SCHEMA public FROM openbrain_auth_rollup CASCADE;
+GRANT USAGE ON SCHEMA public TO openbrain_auth_rollup;
+
+REVOKE ALL ON mcp_auth_events FROM openbrain_auth_rollup CASCADE;
+REVOKE UPDATE (
+  id, ts, outcome, reason, middleware, door, subject, token_label,
+  client_ip, path, inserted_at
+) ON mcp_auth_events FROM openbrain_auth_rollup;
+GRANT SELECT, DELETE ON mcp_auth_events TO openbrain_auth_rollup;
+REVOKE ALL ON SEQUENCE mcp_auth_events_id_seq
+  FROM openbrain_auth_rollup CASCADE;
+
+-- Keep the retention identity unable to manufacture persistent helper objects
+-- or schemas if this idempotent schema file is replayed against a drifted DB.
+DO $auth_rollup_create$
+DECLARE
+  schema_name text;
+BEGIN
+  EXECUTE format(
+    'REVOKE CREATE ON DATABASE %I FROM openbrain_auth_rollup CASCADE',
+    current_database()
+  );
+
+  FOR schema_name IN
+    SELECT nspname
+    FROM pg_namespace
+    WHERE nspname <> 'information_schema'
+      AND nspname !~ '^pg_'
+    ORDER BY nspname
+  LOOP
+    EXECUTE format(
+      'REVOKE CREATE ON SCHEMA %I FROM openbrain_auth_rollup CASCADE',
+      schema_name
+    );
+  END LOOP;
+END;
+$auth_rollup_create$ LANGUAGE plpgsql;
 
 -- openbrain_readonly can inspect and back up corpus auth events. Funnel rows
 -- are intentionally absent from this cluster and from its backup role.
@@ -177,5 +231,10 @@ GRANT USAGE ON SEQUENCE mcp_auth_events_id_seq TO openbrain_app;
 -- (01-schema.sql also grants future public sequences via ALTER DEFAULT
 -- PRIVILEGES, but that only fires for objects created by the role that ran it;
 -- these explicit grants don't depend on the creating role.)
+-- Role memberships are cluster-wide and are not inferred or revoked here; the
+-- final assertion requires this dump identity to remain standalone.
+REVOKE ALL ON mcp_auth_events FROM openbrain_readonly CASCADE;
 GRANT SELECT ON mcp_auth_events TO openbrain_readonly;
+REVOKE ALL ON SEQUENCE mcp_auth_events_id_seq
+  FROM openbrain_readonly CASCADE;
 GRANT SELECT ON SEQUENCE mcp_auth_events_id_seq TO openbrain_readonly;

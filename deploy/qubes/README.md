@@ -265,9 +265,9 @@ an external DB.)
 
 Postgres runs natively, out of compose, in [`db-qube/`](db-qube/), binding
 **loopback only** — the qube has no network-facing listener at all. The app qube
-— its only peer — reaches it as the full app role (plus the readonly role for
-backups and the superuser for remote admin) over a dom0-policy-gated
-qubes.ConnectTCP channel
+— its only peer — reaches it as the full app role (plus auth-rollup for
+retention, readonly for backups, and the superuser for remote admin) over a
+dom0-policy-gated qubes.ConnectTCP channel
 ([app-qube README § The app→db hop](app-qube/README.md#the-appdb-hop-qubesconnecttcp)),
 with `pg_hba` scram on the loopback lines. The ingress qube has no path here at
 all — no qrexec rule, no credential: its Funnel logs land in a local socket-only
@@ -285,10 +285,10 @@ no network-facing listener; the ingress qube's Caddy reaches it over the
 dom0-policy-gated qubes.ConnectTCP channel
 ([the ingress→app hop](ingress-qube/README.md#the-ingressapp-hop-qubesconnecttcp)),
 and mcp's app auth authenticates what arrives. The app qube is the trusted DB
-control-plane, so its `.env` holds the admin + app + readonly passwords (never
-the ingester credential); it also runs the encrypted corpus backup and pulls the
-Funnel aggregate over a separate fixed qrexec service before encrypting it
-([`app-qube/backup/`](app-qube/backup/)). Full recipe in
+control-plane, so its `.env` holds the admin + app + auth-rollup + readonly
+passwords (never the ingester credential); it also runs the encrypted corpus
+backup and pulls the Funnel aggregate over a separate fixed qrexec service
+before encrypting it ([`app-qube/backup/`](app-qube/backup/)). Full recipe in
 [`app-qube/README.md`](app-qube/README.md):
 
 ```sh

@@ -22,13 +22,13 @@ psql_shim="$smoke_root/psql"
 probe_bin="$smoke_root/bin"
 install -d -m 0700 "$smoke_root" "$report_dir" "$probe_bin"
 
-# The job environment already exports OPENBRAIN_APP_PASSWORD. Assert
+# The job environment already exports OPENBRAIN_AUTH_ROLLUP_PASSWORD. Assert
 # that the wrapper strips that attribute before its first external
 # command, not merely before the eventual database client.
 cat > "$probe_bin/dirname" <<'SH'
 #!/usr/bin/env bash
-if [[ -v OPENBRAIN_APP_PASSWORD ]]; then
-  echo "OPENBRAIN_APP_PASSWORD leaked into the first external child" >&2
+if [[ -v OPENBRAIN_AUTH_ROLLUP_PASSWORD ]]; then
+  echo "OPENBRAIN_AUTH_ROLLUP_PASSWORD leaked into the first external child" >&2
   exit 39
 fi
 exec /usr/bin/dirname "$@"
@@ -40,12 +40,12 @@ chmod 0755 "$probe_bin/dirname"
 # forwards stdin, args, and PGPASSWORD unchanged.
 cat > "$psql_shim" <<'SH'
 #!/usr/bin/env bash
-test "${PGPASSWORD:-}" = ci_app_pw || {
+test "${PGPASSWORD:-}" = ci_auth_rollup_pw || {
   echo "expected command-scoped PGPASSWORD" >&2
   exit 40
 }
-if [[ -v OPENBRAIN_APP_PASSWORD ]]; then
-  echo "OPENBRAIN_APP_PASSWORD leaked into the external client" >&2
+if [[ -v OPENBRAIN_AUTH_ROLLUP_PASSWORD ]]; then
+  echo "OPENBRAIN_AUTH_ROLLUP_PASSWORD leaked into the external client" >&2
   exit 41
 fi
 exec docker exec -i -e PGPASSWORD "$DB_INIT_CONTAINER" psql "$@"
@@ -60,7 +60,8 @@ chmod 0755 "$psql_shim"
   printf 'POSTGRES_DB=%q\n' "$POSTGRES_DB"
   # Exercise the second guard too: a sourced file may explicitly
   # restore the credential's export attribute after the first-child check.
-  printf 'export OPENBRAIN_APP_PASSWORD=%q\n' "$OPENBRAIN_APP_PASSWORD"
+  printf 'export OPENBRAIN_AUTH_ROLLUP_PASSWORD=%q\n' \
+    "$OPENBRAIN_AUTH_ROLLUP_PASSWORD"
   printf 'SUMMARY_DIR=%q\n' "$report_dir"
   printf 'PSQL_BIN=%q\n' "$psql_shim"
 } > "$env_file"
@@ -134,7 +135,8 @@ test -z "$(find "$report_dir" -maxdepth 1 -type f -name '.auth-events-summary-*'
   printf 'SUMMARY_TARGET=corpus\n'
   printf 'DB_HOST=127.0.0.1\n'
   printf 'POSTGRES_DB=%q\n' "$POSTGRES_DB"
-  printf 'OPENBRAIN_APP_PASSWORD=%q\n' "$OPENBRAIN_APP_PASSWORD"
+  printf 'OPENBRAIN_AUTH_ROLLUP_PASSWORD=%q\n' \
+    "$OPENBRAIN_AUTH_ROLLUP_PASSWORD"
   printf 'SUMMARY_SQL_FILE=%q\n' "$GITHUB_WORKSPACE/db/summarize_funnel.sql"
   printf 'SUMMARY_DIR=%q\n' "$smoke_root/retired-knob-reports"
   printf 'PSQL_BIN=%q\n' "$psql_shim"

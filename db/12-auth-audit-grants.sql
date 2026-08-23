@@ -1,0 +1,105 @@
+-- Tamper-evident application grants for the corpus auth-decision audit.
+--
+-- Apply after provisioning `openbrain_auth_rollup` and before starting a
+-- server version that requires it, then run the stable
+-- db/03-grants-assertion.sql source last. Requires the database/schema owner
+-- or a superuser (normally postgres). Idempotent; no rows are rewritten.
+
+BEGIN;
+
+-- The request-path role writes auth decisions but must not be able to rewrite
+-- or erase the evidence it generated. Revoke both the historical table-wide
+-- privileges and any per-column UPDATE drift before restoring the exact
+-- append/read contract.
+REVOKE ALL ON public.mcp_auth_events FROM openbrain_app CASCADE;
+REVOKE UPDATE (
+  id,
+  ts,
+  outcome,
+  reason,
+  middleware,
+  door,
+  subject,
+  token_label,
+  client_ip,
+  path,
+  inserted_at
+) ON public.mcp_auth_events FROM openbrain_app;
+GRANT SELECT, INSERT ON public.mcp_auth_events TO openbrain_app;
+
+REVOKE ALL ON SEQUENCE public.mcp_auth_events_id_seq
+  FROM openbrain_app CASCADE;
+GRANT USAGE ON SEQUENCE public.mcp_auth_events_id_seq TO openbrain_app;
+
+-- The operational credential gets only what summarize_auth_events.sql uses:
+-- SELECT for its report and DELETE for the two bounded retention statements.
+-- It cannot insert or update audit rows and has no sequence access. Give it
+-- direct, non-delegable schema USAGE so hardened deployments do not depend on
+-- PostgreSQL's default PUBLIC schema ACL.
+-- This owner-issued convergence cannot safely revoke schema ACLs issued by a
+-- different grantor or default ACLs owned by arbitrary roles; the final grants
+-- assertion reports those sources with explicit repair guidance.
+REVOKE ALL ON SCHEMA public FROM openbrain_auth_rollup CASCADE;
+GRANT USAGE ON SCHEMA public TO openbrain_auth_rollup;
+
+REVOKE ALL ON public.mcp_auth_events
+  FROM openbrain_auth_rollup CASCADE;
+REVOKE UPDATE (
+  id,
+  ts,
+  outcome,
+  reason,
+  middleware,
+  door,
+  subject,
+  token_label,
+  client_ip,
+  path,
+  inserted_at
+) ON public.mcp_auth_events FROM openbrain_auth_rollup;
+GRANT SELECT, DELETE ON public.mcp_auth_events TO openbrain_auth_rollup;
+REVOKE ALL ON SEQUENCE public.mcp_auth_events_id_seq
+  FROM openbrain_auth_rollup CASCADE;
+
+-- The retention identity must not be able to persist helper objects or mint a
+-- new schema. Revoke direct CREATE drift everywhere the corpus can contain
+-- application objects. Ownership or inherited CREATE still fails the final
+-- assertion and must be removed at its source.
+DO $auth_rollup_create$
+DECLARE
+  schema_name text;
+BEGIN
+  EXECUTE format(
+    'REVOKE CREATE ON DATABASE %I FROM openbrain_auth_rollup CASCADE',
+    current_database()
+  );
+
+  FOR schema_name IN
+    SELECT nspname
+    FROM pg_namespace
+    WHERE nspname <> 'information_schema'
+      AND nspname !~ '^pg_'
+    ORDER BY nspname
+  LOOP
+    EXECUTE format(
+      'REVOKE CREATE ON SCHEMA %I FROM openbrain_auth_rollup CASCADE',
+      schema_name
+    );
+  END LOOP;
+END;
+$auth_rollup_create$ LANGUAGE plpgsql;
+
+-- The trusted dump/exploration identity remains read-only even if a deployed
+-- catalog picked up a direct or delegated audit-object mutation grant.
+-- Cluster-wide role memberships are not inferred or revoked here; the final
+-- assertion requires this identity to remain standalone so SET ROLE cannot
+-- bypass effective read-only privilege checks.
+REVOKE ALL ON public.mcp_auth_events
+  FROM openbrain_readonly CASCADE;
+GRANT SELECT ON public.mcp_auth_events TO openbrain_readonly;
+REVOKE ALL ON SEQUENCE public.mcp_auth_events_id_seq
+  FROM openbrain_readonly CASCADE;
+GRANT SELECT ON SEQUENCE public.mcp_auth_events_id_seq
+  TO openbrain_readonly;
+
+COMMIT;

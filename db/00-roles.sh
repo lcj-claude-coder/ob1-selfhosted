@@ -1,5 +1,6 @@
 #!/bin/bash
-# Create the application roles using passwords passed in via env vars.
+# Create the application and corpus-operations roles using passwords passed in
+# via env vars.
 # Runs first (alphabetical order) so 01-schema.sql can grant to existing roles.
 #
 # Passwords are passed to psql via --set and substituted with :'var' (which
@@ -15,11 +16,13 @@ set -euo pipefail
 
 : "${OPENBRAIN_APP_PASSWORD:?OPENBRAIN_APP_PASSWORD must be set in compose env}"
 : "${OPENBRAIN_READONLY_PASSWORD:?OPENBRAIN_READONLY_PASSWORD must be set in compose env}"
+: "${OPENBRAIN_AUTH_ROLLUP_PASSWORD:?OPENBRAIN_AUTH_ROLLUP_PASSWORD must be set in compose env}"
 
 psql -v ON_ERROR_STOP=1 \
   --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   --set=app_password="$OPENBRAIN_APP_PASSWORD" \
   --set=readonly_password="$OPENBRAIN_READONLY_PASSWORD" \
+  --set=auth_rollup_password="$OPENBRAIN_AUTH_ROLLUP_PASSWORD" \
   <<-'EOSQL'
   CREATE ROLE openbrain_app LOGIN PASSWORD :'app_password';
   -- pg_dump deliberately executes SET row_security = off and refuses to copy
@@ -28,6 +31,12 @@ psql -v ON_ERROR_STOP=1 \
   -- identity and receives no DML, so BYPASSRLS preserves the existing full
   -- dump contract without weakening the application role's forced RLS.
   CREATE ROLE openbrain_readonly LOGIN BYPASSRLS PASSWORD :'readonly_password';
+  -- The request-path role may append auth decisions but cannot retire them.
+  -- This separate credential can report and apply bounded retention to that
+  -- one table, with no access to memories, sessions, or revision history.
+  CREATE ROLE openbrain_auth_rollup LOGIN NOSUPERUSER NOCREATEDB
+    NOCREATEROLE NOREPLICATION NOBYPASSRLS
+    PASSWORD :'auth_rollup_password';
 EOSQL
 
 # Dedicated native-token lifecycle role. It can list non-secret token metadata

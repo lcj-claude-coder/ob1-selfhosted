@@ -4,8 +4,8 @@ The [three-qube design](../three-qube-design.md) pulls Postgres out of compose
 into a dedicated **database qube**: a minimal Debian-templated AppVM running
 Postgres + pgvector natively, **bound to loopback only** — no network-facing
 listener at all — and reachable by exactly **one** peer: the app qube (superuser
-for remote admin, plus the app and readonly roles), over a dom0-policy-gated
-qubes.ConnectTCP channel
+for remote admin, plus the app, auth-rollup, and readonly roles), over a
+dom0-policy-gated qubes.ConnectTCP channel
 ([app-qube README § The app→db hop](../app-qube/README.md#the-appdb-hop-qubesconnecttcp)).
 The ingress qube is deliberately not a peer — no qrexec rule, no credential — it
 writes Funnel logs to a local sink of its own; see the
@@ -22,12 +22,12 @@ are gone: nothing here needs a tailnet or peer IP any more).
 Everything durable lives under `/rw` (a stock AppVM wipes `/etc/systemd/system`
 and most of `/etc` on every reboot), and is re-installed at boot by `rc.local`.
 
-| File here                        | Install at                                         | Purpose                                                                                                                                                                                                                                                                                                                                  |
-| -------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `qubes-bind-dirs.d/50_user.conf` | `/rw/config/qubes-bind-dirs.d/50_user.conf`        | Persist PGDATA, the cluster config, and the Tailscale identity across reboots                                                                                                                                                                                                                                                            |
-| `rc.local`                       | `/rw/config/rc.local` (chmod +x)                   | Boot: start tailscaled (optional — node kept with zero inbound grants) → start Postgres (no interface wait; the cluster binds loopback only)                                                                                                                                                                                             |
-| `pg_hba.snippet.conf`            | append to `/etc/postgresql/<ver>/main/pg_hba.conf` | scram **loopback** lines: superuser (remote admin) + app + readonly — every remote caller arrives on loopback via ConnectTCP. No line for the ingress qube — existing installs must also REMOVE the retired ingress and tailnet lines, see [§ Migrating an existing install to ConnectTCP](#migrating-an-existing-install-to-connecttcp) |
-| `postgresql.local.conf`          | `conf.d/` drop-in or `ALTER SYSTEM`                | `listen_addresses = 'localhost'` and `ssl = off`                                                                                                                                                                                                                                                                                         |
+| File here                        | Install at                                         | Purpose                                                                                                                                                                                                                                                                                                                                                |
+| -------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `qubes-bind-dirs.d/50_user.conf` | `/rw/config/qubes-bind-dirs.d/50_user.conf`        | Persist PGDATA, the cluster config, and the Tailscale identity across reboots                                                                                                                                                                                                                                                                          |
+| `rc.local`                       | `/rw/config/rc.local` (chmod +x)                   | Boot: start tailscaled (optional — node kept with zero inbound grants) → start Postgres (no interface wait; the cluster binds loopback only)                                                                                                                                                                                                           |
+| `pg_hba.snippet.conf`            | append to `/etc/postgresql/<ver>/main/pg_hba.conf` | scram **loopback** lines: superuser (remote admin) + app + auth-rollup + readonly — every remote caller arrives on loopback via ConnectTCP. No line for the ingress qube — existing installs must also REMOVE the retired ingress and tailnet lines, see [§ Migrating an existing install to ConnectTCP](#migrating-an-existing-install-to-connecttcp) |
+| `postgresql.local.conf`          | `conf.d/` drop-in or `ALTER SYSTEM`                | `listen_addresses = 'localhost'` and `ssl = off`                                                                                                                                                                                                                                                                                                       |
 
 The `qubes-firewall-user-script` (the `tailscale0:5432` accept) and
 `ob1-db-firewall.service` (its post-tailscaled applier) that earlier versions of
@@ -54,14 +54,15 @@ exposes the database:
    qube deliberately has no rule. This layer replaces the old Tailscale-ACL +
    nftables source scoping — it is enforced below anything a compromised peer
    qube can reach.
-3. **`pg_hba.conf`** — `scram-sha-256` on the loopback lines: the app and
-   readonly roles scoped to the `openbrain` database, and the **superuser** (for
-   remote DB admin — see the trade-off note below). pg_hba can no longer tell
-   callers apart by source (everything arrives as loopback); it keeps the
-   role/database scoping and the password gate — **provided the stock broad
-   `host all all` loopback lines are removed**: first match wins, and left in
-   place they shadow the scoped lines entirely (the snippet's header and the
-   migration checklist both carry the removal + the prove-by-attempt probe).
+3. **`pg_hba.conf`** — `scram-sha-256` on the loopback lines: the app,
+   auth-rollup, and readonly roles scoped to the `openbrain` database, and the
+   **superuser** (for remote DB admin — see the trade-off note below). pg_hba
+   can no longer tell callers apart by source (everything arrives as loopback);
+   it keeps the role/database scoping and the password gate — **provided the
+   stock broad `host all all` loopback lines are removed**: first match wins,
+   and left in place they shadow the scoped lines entirely (the snippet's header
+   and the migration checklist both carry the removal + the prove-by-attempt
+   probe).
 
 **Superuser remote-admin trade-off.** The superuser (`postgres`) is reachable
 through the **app qube's ConnectTCP channel only**, so role provisioning +
@@ -139,9 +140,10 @@ In broad strokes, once per cluster:
 # as the postgres superuser, over the loopback socket:
 sudo -u postgres psql -c "CREATE DATABASE openbrain;"
 sudo -u postgres psql -d openbrain -c "CREATE EXTENSION IF NOT EXISTS vector;"
-# then create the openbrain_app / openbrain_readonly / openbrain_token_admin
-# roles — see db/00-roles.sh for the exact, up-to-date statements (passwords and
-# grants; token admin may remain NOLOGIN). The ingester and monitor roles
+# then create the openbrain_app / openbrain_auth_rollup / openbrain_readonly /
+# openbrain_token_admin roles — see db/00-roles.sh for the exact, up-to-date
+# statements (passwords and grants; token admin may remain NOLOGIN). The
+# ingester and monitor roles
 # belong on a LOCAL log sink, not here (see db/log-sink/) —
 # there is no Pattern B exception. Apply the SQL files in this order:
 #   db/01-schema.sql
@@ -154,6 +156,7 @@ sudo -u postgres psql -d openbrain -c "CREATE EXTENSION IF NOT EXISTS vector;"
 #   db/09-retire-corpus-funnel.sql
 #   db/10-thought-mutations.sql
 #   db/11-session-update-grants.sql
+#   db/12-auth-audit-grants.sql
 #   db/03-grants-assertion.sql  # always last
 ```
 
@@ -224,6 +227,15 @@ probe requires this schema, but the Qubes app remains OAuth-only: it does not
 enable native token verification, and the dedicated administrator role can stay
 `NOLOGIN`. See
 [Native access tokens](../../../docs/native-access-tokens.md#existing-database-upgrade).
+
+Server 1.25.0 adds the `openbrain_auth_rollup` login. On a fresh cluster, create
+it from the exact definition in `db/00-roles.sh`; on an existing split install,
+set `OPENBRAIN_AUTH_ROLLUP_PASSWORD` in the app qube `.env` and run
+`scripts/upgrade-enable-auth-rollup-role.sh deploy/qubes/app-qube` from the
+checkout root. Install and reload this directory's current HBA snippet, apply
+[`db/12-auth-audit-grants.sql`](../../../db/12-auth-audit-grants.sql), and run
+`db/03-grants-assertion.sql` last. The role has SELECT/DELETE on
+`mcp_auth_events` only; the request-path app role is reduced to SELECT/INSERT.
 
 ## Migrating an existing install to ConnectTCP
 
@@ -370,7 +382,9 @@ socket-only sink.
    ```
 
 5. **Apply the corpus half and guarded retirement in order**, connected to
-   `openbrain` as superuser:
+   `openbrain` as superuser. On 1.25.0+, provision `openbrain_auth_rollup` first
+   as described under [First boot / provisioning](#first-boot--provisioning),
+   because the current observability migration grants to that role:
 
    ```sh
    psql -X -v ON_ERROR_STOP=1 -f db/02-observability.sql

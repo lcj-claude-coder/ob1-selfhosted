@@ -102,10 +102,10 @@ generic subject mapping, and a browserless verification command are covered in
 Copy your filled-in `.env` into this directory (including the required
 `METADATA_FALLBACK_POLICY`; Pattern B also needs the `AUTH0_*` trio,
 `OPENBRAIN_INGESTER_PASSWORD`, `LOG_SINK_SUPERUSER_PASSWORD`,
-`OPENBRAIN_LOGS_ROLLUP_PASSWORD`, and an absolute `LOG_SINK_SOCKET_DIR`; set
-`OPENBRAIN_LOGS_BACKUP_PASSWORD` only when installing an aggregate backup) and
-uncomment `COMPOSE_FILE` + `COMPOSE_PROFILES` at its bottom. Then either run
-with explicit flags:
+`OPENBRAIN_LOGS_ROLLUP_PASSWORD`, `OPENBRAIN_AUTH_ROLLUP_PASSWORD`, and an
+absolute `LOG_SINK_SOCKET_DIR`; set `OPENBRAIN_LOGS_BACKUP_PASSWORD` only when
+installing an aggregate backup) and uncomment `COMPOSE_FILE` +
+`COMPOSE_PROFILES` at its bottom. Then either run with explicit flags:
 
 ```bash
 cd deploy/compose-tailnet
@@ -278,8 +278,8 @@ scoped env files in `deploy/qubes/{ingress-qube,app-qube}/`.
 When `deploy/qubes/docker-compose.external-db.yml` parks the bundled corpus
 service, keep the sink job on `SUMMARY_BACKEND=compose`, but configure the
 corpus job with `SUMMARY_BACKEND=postgres`, the external `DB_HOST`, and its
-scoped `OPENBRAIN_APP_PASSWORD`. There is intentionally no local `postgres`
-container for the corpus target to enter in that overlay.
+scoped `OPENBRAIN_AUTH_ROLLUP_PASSWORD`. There is intentionally no local
+`postgres` container for the corpus target to enter in that overlay.
 
 **Ad-hoc queries use the owning cluster.** For Funnel rows, enter the sink with
 its rollup or monitor role:
@@ -290,9 +290,9 @@ docker compose --env-file .env exec -T log-sink sh -c \
 ```
 
 Then query `funnel_access_log` / `funnel_access_summary`. Query
-`mcp_auth_events` through the corpus's `openbrain_readonly` or app role. There
-is no role that can join Funnel metadata to thoughts because no cluster contains
-both relation sets.
+`mcp_auth_events` through the corpus's `openbrain_readonly` or dedicated
+`openbrain_auth_rollup` role. There is no role that can join Funnel metadata to
+thoughts because no cluster contains both relation sets.
 
 The Caddy field discipline and report contents are detailed in
 [Funnel MCP perimeter](../../docs/funnel-mcp-perimeter.md); the role and
@@ -440,6 +440,9 @@ index each time:
 (
 set -e
 docker compose --env-file .env build mcp log-ingester
+# 1.25.0+: set OPENBRAIN_AUTH_ROLLUP_PASSWORD in .env and create/rotate the
+# dedicated role before 02-observability.sql grants to it.
+bash ../../scripts/upgrade-enable-auth-rollup-role.sh .
 docker compose --env-file .env stop mcp
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/02-observability.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/04-sessions.sql
@@ -450,10 +453,19 @@ docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postg
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/09-retire-corpus-funnel.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/10-thought-mutations.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/11-session-update-grants.sql
+docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/12-auth-audit-grants.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/03-grants-assertion.sql
 docker compose --env-file .env up -d
 )
 ```
+
+Upgrading to **1.25.0+**: provision `openbrain_auth_rollup` with the helper in
+the block, then apply `12-auth-audit-grants.sql` and the completed-catalog
+assertion before rolling the server. The migration removes auth-event
+UPDATE/DELETE from `openbrain_app`; the new role receives SELECT/DELETE on
+`mcp_auth_events` only, so retention no longer shares the request-path
+credential. Both the boot probe and assertion reject the historical broad app
+grant or a widened rollup role.
 
 Upgrading to **1.24.0+**: `11-session-update-grants.sql` (database owner)
 removes table-wide session UPDATE, grants only the parent refresh/status
@@ -537,10 +549,11 @@ docker compose --env-file .env exec -T postgres \
 
 A non-zero exit means a completed-catalog invariant failed. Prefer a targeted
 fix (e.g. `REVOKE DELETE ON public.thoughts FROM openbrain_app;`). To re-sync
-wholesale, re-apply `01-schema.sql` → `02-observability.sql`, apply any pending
-later schema migrations (`04`, `05`, `06`, `07`, `08`, `09`, and future files),
-then run `03-grants-assertion.sql` **last** — never `01` alone, since its
-REVOKE-all block strips observability grants until `02` restores them.
+wholesale on 1.25.0+, provision `openbrain_auth_rollup` first with the helper
+used in the upgrade block above, then re-apply `01-schema.sql` →
+`02-observability.sql`, apply pending numbered migrations `04` through `12`, and
+run `03-grants-assertion.sql` **last** — never `01` alone, since its REVOKE-all
+block strips observability grants until `02` restores them.
 
 To retire the unused historical thought-search RPC without a full schema replay,
 run

@@ -18,8 +18,8 @@
 -- Putting the assertion in its own file solves both cases:
 --   1. Fresh init: the Compose/CI paths mount this source file as
 --      99-grants-assertion.sql, after every schema migration. Native
---      provisioning applies 01-, 02-, 04-, 05-, 06-, 07-, 08-, 09-, 10-, and
---      11-, then invokes
+--      provisioning applies 01-, 02-, 04-, 05-, 06-, 07-, 08-, 09-, 10-,
+--      11-, and 12-, then invokes
 --      this stable source path last. In both cases the assertion sees the
 --      completed catalog, so an init file that widens a protected role fails
 --      loudly.
@@ -38,10 +38,11 @@
 -- or skip/undo this check and is outside this SQL file's threat boundary.
 --
 -- Invariants checked:
---   (a) `openbrain_app` must have no role memberships and must not be a
---       superuser or hold any cluster-level privilege; `openbrain_readonly`
---       must hold BYPASSRLS for pg_dump and no other unsafe attribute; and
---       `openbrain_token_admin` must have no memberships or unsafe attributes.
+--   (a) `openbrain_app` and `openbrain_readonly` must have no role memberships;
+--       the app must not be a superuser or hold any cluster-level privilege,
+--       the read-only role must hold BYPASSRLS for pg_dump and no other unsafe
+--       attribute, and `openbrain_token_admin` must have no memberships or
+--       unsafe attributes.
 --   (b) `openbrain_app` must NOT have DELETE on `public.thoughts`.
 --   (c) `openbrain_app` MUST have SELECT and INSERT on `public.thoughts`,
 --       plus UPDATE on its content columns only — and no UPDATE (table-wide or
@@ -62,6 +63,9 @@
 --       dumpable by the read-only role, under forced head-gated RLS, and the
 --       audience-move helper is a table-owner-owned, fixed-search-path
 --       SECURITY DEFINER function executable only by the app.
+--   (i) auth-decision history is non-delegable SELECT/INSERT-only to the app,
+--       while a standalone corpus rollup role has non-delegable SELECT/DELETE
+--       on that table alone and no persistent-object creation route.
 --
 -- The openbrain_app content/audience checks are deliberately scoped to thoughts
 -- and sessions: 02-observability.sql legitimately grants it access to other
@@ -254,6 +258,18 @@ BEGIN
      ), false) THEN
     RAISE EXCEPTION
       'grants assertion failed: openbrain_readonly lacks BYPASSRLS required by full pg_dump under FORCE RLS.';
+  END IF;
+  SELECT string_agg(
+    roleid::regrole::text,
+    ', ' ORDER BY roleid::regrole::text
+  )
+  INTO memberships
+  FROM pg_auth_members
+  WHERE member = 'openbrain_readonly'::regrole;
+  IF memberships IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_readonly is a member of: %. It must remain standalone because SET ROLE can bypass effective read-only privilege checks. Revoke each membership explicitly, then rerun this assertion.',
+      memberships;
   END IF;
   IF has_table_privilege('openbrain_app', 'public.thoughts', 'DELETE') THEN
     RAISE EXCEPTION
@@ -511,6 +527,317 @@ BEGIN
   ) THEN
     RAISE EXCEPTION
       'grants assertion failed: PUBLIC can access metadata degradation relations or sequence.';
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Auth-decision audit invariants. The request-path credential may append and
+-- read rows but cannot rewrite or erase them. Retention/reporting is isolated
+-- in a standalone login role with direct schema USAGE plus non-delegable
+-- SELECT/DELETE on this one table and no sequence, persistent-object, corpus,
+-- or privileged-function access. The backup role stays SELECT-only.
+DO $$
+DECLARE
+  audit_table oid := to_regclass('public.mcp_auth_events');
+  audit_sequence oid := to_regclass('public.mcp_auth_events_id_seq');
+  app_oid oid := to_regrole('openbrain_app');
+  readonly_oid oid := to_regrole('openbrain_readonly');
+  rollup_oid oid := to_regrole('openbrain_auth_rollup');
+  bad text;
+BEGIN
+  IF audit_table IS NULL OR audit_sequence IS NULL OR rollup_oid IS NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: auth audit table, sequence, or openbrain_auth_rollup role is missing; provision the role and apply db/12-auth-audit-grants.sql first.';
+  END IF;
+
+  SELECT concat_ws(
+    ', ',
+    CASE WHEN NOT rolcanlogin THEN 'NOLOGIN' END,
+    CASE WHEN rolsuper THEN 'SUPERUSER' END,
+    CASE WHEN rolcreatedb THEN 'CREATEDB' END,
+    CASE WHEN rolcreaterole THEN 'CREATEROLE' END,
+    CASE WHEN rolreplication THEN 'REPLICATION' END,
+    CASE WHEN rolbypassrls THEN 'BYPASSRLS' END
+  )
+    INTO bad
+  FROM pg_roles
+  WHERE oid = rollup_oid;
+  IF bad <> '' THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup has unsafe role attributes: %.',
+      bad;
+  END IF;
+
+  SELECT string_agg(
+           format(
+             '%s -> %s',
+             member::regrole::text,
+             roleid::regrole::text
+           ),
+           ', ' ORDER BY member::regrole::text, roleid::regrole::text
+         )
+    INTO bad
+  FROM pg_auth_members
+  WHERE member = rollup_oid OR roleid = rollup_oid;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup participates in role membership: %. It must remain standalone.',
+      bad;
+  END IF;
+
+  IF NOT (
+       has_table_privilege(app_oid, audit_table, 'SELECT')
+       AND has_table_privilege(app_oid, audit_table, 'INSERT')
+     ) OR has_table_privilege(
+       app_oid, audit_table,
+       'UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
+     ) OR has_any_column_privilege(
+       app_oid, audit_table, 'UPDATE, REFERENCES'
+     ) THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_app auth audit access must be SELECT/INSERT-only; apply db/12-auth-audit-grants.sql.';
+  END IF;
+  IF NOT has_sequence_privilege(app_oid, audit_sequence, 'USAGE')
+     OR has_sequence_privilege(app_oid, audit_sequence, 'SELECT, UPDATE') THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_app auth audit sequence access must be USAGE-only.';
+  END IF;
+
+  IF NOT (
+       has_table_privilege(rollup_oid, audit_table, 'SELECT')
+       AND has_table_privilege(rollup_oid, audit_table, 'DELETE')
+     ) OR has_table_privilege(
+       rollup_oid, audit_table,
+       'INSERT, UPDATE, TRUNCATE, REFERENCES, TRIGGER'
+     ) OR has_any_column_privilege(
+       rollup_oid, audit_table, 'INSERT, UPDATE, REFERENCES'
+     ) OR has_sequence_privilege(
+       rollup_oid, audit_sequence, 'USAGE, SELECT, UPDATE'
+     ) THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup must have SELECT/DELETE only on public.mcp_auth_events and no sequence access.';
+  END IF;
+
+  -- A qualified relation name still requires schema USAGE. Pin a direct,
+  -- ordinary ACL instead of accepting the default PUBLIC grant: hardened
+  -- deployments may revoke PUBLIC, and WITH GRANT OPTION would let the
+  -- retention credential delegate this prerequisite.
+  IF NOT has_schema_privilege(
+       rollup_oid, to_regnamespace('public')::oid, 'USAGE'
+     ) OR NOT EXISTS (
+       SELECT 1
+       FROM pg_namespace AS usage_namespace
+       CROSS JOIN LATERAL aclexplode(usage_namespace.nspacl) AS usage_acl
+       WHERE usage_namespace.oid = to_regnamespace('public')::oid
+         AND usage_acl.grantee = rollup_oid
+         AND usage_acl.privilege_type = 'USAGE'
+         AND NOT usage_acl.is_grantable
+     ) THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup must have direct, non-delegable USAGE on schema public. Apply db/12-auth-audit-grants.sql.';
+  END IF;
+
+  -- ACLs are keyed by grantor as well as grantee. The ordinary owner-issued row
+  -- above can coexist with a grantable row issued by another role, so reject
+  -- every grantable direct USAGE row instead of treating one safe row as proof
+  -- that the whole schema ACL is safe.
+  SELECT string_agg(
+           schema_grant.grantor_name,
+           ', ' ORDER BY schema_grant.grantor_name
+         )
+    INTO bad
+  FROM (
+    SELECT DISTINCT usage_acl.grantor::regrole::text AS grantor_name
+    FROM pg_namespace AS usage_namespace
+    CROSS JOIN LATERAL aclexplode(usage_namespace.nspacl) AS usage_acl
+    WHERE usage_namespace.oid = to_regnamespace('public')::oid
+      AND usage_acl.grantee = rollup_oid
+      AND usage_acl.privilege_type = 'USAGE'
+      AND usage_acl.is_grantable
+  ) schema_grant;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup has grantable USAGE on schema public from grantor role(s): %. db/12-auth-audit-grants.sql cannot remove ACLs issued by another grantor. As each named grantor, run REVOKE GRANT OPTION FOR USAGE ON SCHEMA public FROM openbrain_auth_rollup CASCADE, then rerun this assertion.',
+      bad;
+  END IF;
+
+  -- A default ACL is a standing future grant, not an effective privilege on a
+  -- current object. Reject every relation/sequence default aimed at the rollup
+  -- role; db/12 cannot safely rewrite defaults owned by arbitrary cluster roles.
+  SELECT string_agg(
+           default_grant.repair,
+           '; ' ORDER BY default_grant.repair
+         )
+    INTO bad
+  FROM (
+    SELECT DISTINCT format(
+      'ALTER DEFAULT PRIVILEGES FOR ROLE %I%s REVOKE %s ON %s FROM openbrain_auth_rollup',
+      owner_role.rolname,
+      CASE
+        WHEN default_acl.defaclnamespace = 0 THEN ''
+        ELSE format(' IN SCHEMA %I', default_namespace.nspname)
+      END,
+      default_entry.privilege_type,
+      CASE default_acl.defaclobjtype
+        WHEN 'S' THEN 'SEQUENCES'
+        ELSE 'TABLES'
+      END
+    ) AS repair
+    FROM pg_default_acl AS default_acl
+    JOIN pg_roles AS owner_role ON owner_role.oid = default_acl.defaclrole
+    LEFT JOIN pg_namespace AS default_namespace
+      ON default_namespace.oid = default_acl.defaclnamespace
+    CROSS JOIN LATERAL aclexplode(default_acl.defaclacl) AS default_entry
+    WHERE default_acl.defaclobjtype IN ('r', 'S')
+      AND default_entry.grantee = rollup_oid
+  ) default_grant;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: default privileges would grant future relations or sequences to openbrain_auth_rollup. db/12-auth-audit-grants.sql does not alter defaults owned by arbitrary roles. Run the reported command(s) as a superuser or the named owner, then rerun this assertion: %.',
+      bad;
+  END IF;
+
+  -- Effective-privilege helpers intentionally collapse ordinary grants and
+  -- WITH GRANT OPTION. Inspect direct relation/column ACLs as well so neither
+  -- runtime identity can delegate its otherwise-allowed audit access.
+  SELECT string_agg(grantable.description, ', ' ORDER BY grantable.description)
+    INTO bad
+  FROM (
+    SELECT format(
+             '%s on %I.%I to %s',
+             acl.privilege_type,
+             namespace.nspname,
+             relation.relname,
+             acl.grantee::regrole::text
+           ) AS description
+    FROM pg_class relation
+    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+    CROSS JOIN LATERAL aclexplode(relation.relacl) acl
+    WHERE relation.oid = ANY (ARRAY[audit_table, audit_sequence])
+      AND acl.grantee = ANY (ARRAY[app_oid, rollup_oid])
+      AND acl.is_grantable
+
+    UNION ALL
+
+    SELECT format(
+             '%s on %I.%I.%I to %s',
+             acl.privilege_type,
+             namespace.nspname,
+             relation.relname,
+             attribute.attname,
+             acl.grantee::regrole::text
+           ) AS description
+    FROM pg_attribute attribute
+    JOIN pg_class relation ON relation.oid = attribute.attrelid
+    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+    CROSS JOIN LATERAL aclexplode(attribute.attacl) acl
+    WHERE attribute.attrelid = audit_table
+      AND attribute.attnum > 0
+      AND NOT attribute.attisdropped
+      AND attribute.attacl IS NOT NULL
+      AND acl.grantee = ANY (ARRAY[app_oid, rollup_oid])
+      AND acl.is_grantable
+  ) grantable;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: auth-audit privileges must not carry WITH GRANT OPTION: %. Apply db/12-auth-audit-grants.sql.',
+      bad;
+  END IF;
+
+  IF NOT has_table_privilege(readonly_oid, audit_table, 'SELECT')
+     OR has_table_privilege(
+       readonly_oid, audit_table,
+       'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
+     ) OR NOT has_sequence_privilege(
+       readonly_oid, audit_sequence, 'SELECT'
+     ) OR has_sequence_privilege(
+       readonly_oid, audit_sequence, 'USAGE, UPDATE'
+     ) THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_readonly cannot safely dump auth audit history.';
+  END IF;
+
+  -- CREATE on any application schema or on the database would let the rollup
+  -- persist helper objects outside the direct relation scan below. Check
+  -- effective privileges so PUBLIC, ownership, and membership routes count.
+  SELECT string_agg(
+           format('schema %I', namespace.nspname),
+           ', ' ORDER BY namespace.nspname
+         )
+    INTO bad
+  FROM pg_namespace namespace
+  WHERE namespace.nspname <> 'information_schema'
+    AND namespace.nspname !~ '^pg_'
+    AND has_schema_privilege(rollup_oid, namespace.oid, 'CREATE');
+  IF has_database_privilege(
+       rollup_oid, current_database(), 'CREATE'
+     ) THEN
+    bad := concat_ws(', ', format('database %I', current_database()), bad);
+  END IF;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup can create persistent corpus objects via: %. Apply db/12-auth-audit-grants.sql; if the privilege is inherited or ownership-based, remove that source explicitly.',
+      bad;
+  END IF;
+
+  -- The retention credential must not become a sideways corpus credential.
+  -- Scan every non-system relation rather than maintaining a memory-table
+  -- denylist, and reject all SECURITY DEFINER execution as well.
+  SELECT string_agg(exposed.object_name, ', ' ORDER BY exposed.object_name)
+    INTO bad
+  FROM (
+    SELECT format('%I.%I', namespace.nspname, relation.relname) AS object_name
+    FROM pg_class relation
+    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+    WHERE namespace.nspname <> 'information_schema'
+      AND namespace.nspname !~ '^pg_'
+      AND relation.oid <> audit_table
+      AND (
+        relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+        AND (
+          has_table_privilege(
+            rollup_oid, relation.oid,
+            'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
+          )
+          OR has_any_column_privilege(
+            rollup_oid, relation.oid,
+            'SELECT, INSERT, UPDATE, REFERENCES'
+          )
+        )
+        OR relation.relkind = 'S'
+          AND has_sequence_privilege(
+            rollup_oid, relation.oid, 'USAGE, SELECT, UPDATE'
+          )
+      )
+  ) exposed;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup can access non-audit relations: %.',
+      bad;
+  END IF;
+
+  SELECT string_agg(
+           format(
+             '%I.%I(%s)',
+             namespace.nspname,
+             routine.proname,
+             pg_get_function_identity_arguments(routine.oid)
+           ),
+           ', ' ORDER BY namespace.nspname,
+                         routine.proname,
+                         pg_get_function_identity_arguments(routine.oid)
+         )
+    INTO bad
+  FROM pg_proc routine
+  JOIN pg_namespace namespace ON namespace.oid = routine.pronamespace
+  WHERE namespace.nspname <> 'information_schema'
+    AND namespace.nspname !~ '^pg_'
+    AND routine.prosecdef
+    AND has_function_privilege(rollup_oid, routine.oid, 'EXECUTE');
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup can execute SECURITY DEFINER functions: %.',
+      bad;
   END IF;
 END;
 $$ LANGUAGE plpgsql;

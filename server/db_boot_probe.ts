@@ -96,6 +96,7 @@ export async function probeDbAtBoot(
         boolean,
         boolean,
         boolean,
+        boolean,
       ]>(
         `WITH session_update_columns(attname) AS (
            VALUES
@@ -285,8 +286,251 @@ export async function probeDbAtBoot(
              AND EXISTS (
                SELECT 1 FROM pg_constraint
                WHERE conrelid = to_regclass('public.mcp_auth_events')
-                 AND conname = 'mcp_auth_events_outcome_shape_check'
+               AND conname = 'mcp_auth_events_outcome_shape_check'
              ),
+           -- Mirror db/03's security-relevant auth-audit boundary at boot:
+           -- exact non-delegable app table/sequence rights, a SELECT-only
+           -- standalone backup role, and a standalone rollup with direct,
+           -- wholly non-delegable schema USAGE but no future default ACL,
+           -- persistent-object, sideways relation, sequence, membership, or
+           -- definer-function path.
+           COALESCE(
+             to_regclass('public.mcp_auth_events') IS NOT NULL
+             AND to_regclass('public.mcp_auth_events_id_seq') IS NOT NULL
+             AND has_table_privilege(
+               current_user, to_regclass('public.mcp_auth_events'), 'SELECT'
+             )
+             AND has_table_privilege(
+               current_user, to_regclass('public.mcp_auth_events'), 'INSERT'
+             )
+             AND NOT has_table_privilege(
+               current_user,
+               to_regclass('public.mcp_auth_events'),
+               'UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
+             )
+             AND NOT has_any_column_privilege(
+               current_user,
+               to_regclass('public.mcp_auth_events'),
+               'UPDATE, REFERENCES'
+             )
+             AND has_sequence_privilege(
+               current_user,
+               to_regclass('public.mcp_auth_events_id_seq'),
+               'USAGE'
+             )
+             AND NOT has_sequence_privilege(
+               current_user,
+               to_regclass('public.mcp_auth_events_id_seq'),
+               'SELECT, UPDATE'
+             )
+             AND NOT EXISTS (
+               SELECT 1
+               FROM pg_auth_members AS application_membership
+               WHERE application_membership.member =
+                     to_regrole(current_user)::oid
+             )
+             AND EXISTS (
+               SELECT 1
+               FROM pg_roles AS readonly
+               WHERE readonly.rolname = 'openbrain_readonly'
+                 AND has_table_privilege(
+                   readonly.oid,
+                   to_regclass('public.mcp_auth_events'),
+                   'SELECT'
+                 )
+                 AND NOT has_table_privilege(
+                   readonly.oid,
+                   to_regclass('public.mcp_auth_events'),
+                   'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
+                 )
+                 AND NOT has_any_column_privilege(
+                   readonly.oid,
+                   to_regclass('public.mcp_auth_events'),
+                   'INSERT, UPDATE, REFERENCES'
+                 )
+                 AND has_sequence_privilege(
+                   readonly.oid,
+                   to_regclass('public.mcp_auth_events_id_seq'),
+                   'SELECT'
+                 )
+                 AND NOT has_sequence_privilege(
+                   readonly.oid,
+                   to_regclass('public.mcp_auth_events_id_seq'),
+                   'USAGE, UPDATE'
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_auth_members AS readonly_membership
+                   WHERE readonly_membership.member = readonly.oid
+                 )
+             )
+             AND EXISTS (
+               SELECT 1
+               FROM pg_roles AS rollup
+               WHERE rollup.rolname = 'openbrain_auth_rollup'
+                 AND rollup.rolcanlogin
+                 AND NOT rollup.rolsuper
+                 AND NOT rollup.rolcreatedb
+                 AND NOT rollup.rolcreaterole
+                 AND NOT rollup.rolreplication
+                 AND NOT rollup.rolbypassrls
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_auth_members AS membership
+                   WHERE membership.member = rollup.oid
+                      OR membership.roleid = rollup.oid
+                 )
+                 AND has_schema_privilege(
+                   rollup.oid,
+                   to_regnamespace('public')::oid,
+                   'USAGE'
+                 )
+                 AND EXISTS (
+                   SELECT 1
+                   FROM pg_namespace AS usage_namespace
+                   CROSS JOIN LATERAL
+                     aclexplode(usage_namespace.nspacl) AS usage_acl
+                   WHERE usage_namespace.oid =
+                         to_regnamespace('public')::oid
+                     AND usage_acl.grantee = rollup.oid
+                     AND usage_acl.privilege_type = 'USAGE'
+                     AND NOT usage_acl.is_grantable
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_namespace AS grantable_usage_namespace
+                   CROSS JOIN LATERAL
+                     aclexplode(grantable_usage_namespace.nspacl)
+                       AS grantable_usage_acl
+                   WHERE grantable_usage_namespace.oid =
+                         to_regnamespace('public')::oid
+                     AND grantable_usage_acl.grantee = rollup.oid
+                     AND grantable_usage_acl.privilege_type = 'USAGE'
+                     AND grantable_usage_acl.is_grantable
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_default_acl AS rollup_default_acl
+                   CROSS JOIN LATERAL
+                     aclexplode(rollup_default_acl.defaclacl)
+                       AS rollup_default_entry
+                   WHERE rollup_default_acl.defaclobjtype IN ('r', 'S')
+                     AND rollup_default_entry.grantee = rollup.oid
+                 )
+                 AND has_table_privilege(
+                   rollup.oid,
+                   to_regclass('public.mcp_auth_events'),
+                   'SELECT'
+                 )
+                 AND has_table_privilege(
+                   rollup.oid,
+                   to_regclass('public.mcp_auth_events'),
+                   'DELETE'
+                 )
+                 AND NOT has_table_privilege(
+                   rollup.oid,
+                   to_regclass('public.mcp_auth_events'),
+                   'INSERT, UPDATE, TRUNCATE, REFERENCES, TRIGGER'
+                 )
+                 AND NOT has_any_column_privilege(
+                   rollup.oid,
+                   to_regclass('public.mcp_auth_events'),
+                   'INSERT, UPDATE, REFERENCES'
+                 )
+                 AND NOT has_sequence_privilege(
+                   rollup.oid,
+                   to_regclass('public.mcp_auth_events_id_seq'),
+                   'USAGE, SELECT, UPDATE'
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM (
+                     SELECT acl.grantee, acl.is_grantable
+                     FROM pg_class AS guarded_relation
+                     CROSS JOIN LATERAL
+                       aclexplode(guarded_relation.relacl) AS acl
+                     WHERE guarded_relation.oid = ANY (ARRAY[
+                       to_regclass('public.mcp_auth_events'),
+                       to_regclass('public.mcp_auth_events_id_seq')
+                     ])
+
+                     UNION ALL
+
+                     SELECT acl.grantee, acl.is_grantable
+                     FROM pg_attribute AS guarded_column
+                     CROSS JOIN LATERAL
+                       aclexplode(guarded_column.attacl) AS acl
+                     WHERE guarded_column.attrelid =
+                           to_regclass('public.mcp_auth_events')
+                       AND guarded_column.attnum > 0
+                       AND NOT guarded_column.attisdropped
+                       AND guarded_column.attacl IS NOT NULL
+                   ) AS direct_acl
+                   WHERE direct_acl.grantee IN (
+                     to_regrole(current_user)::oid,
+                     rollup.oid
+                   )
+                     AND direct_acl.is_grantable
+                 )
+                 AND NOT has_database_privilege(
+                   rollup.oid, current_database(), 'CREATE'
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_namespace AS creatable_namespace
+                   WHERE creatable_namespace.nspname <>
+                         'information_schema'
+                     AND creatable_namespace.nspname !~ '^pg_'
+                     AND has_schema_privilege(
+                       rollup.oid, creatable_namespace.oid, 'CREATE'
+                     )
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_class AS relation
+                   JOIN pg_namespace AS namespace
+                     ON namespace.oid = relation.relnamespace
+                   WHERE namespace.nspname <> 'information_schema'
+                     AND namespace.nspname !~ '^pg_'
+                     AND relation.oid <>
+                         to_regclass('public.mcp_auth_events')
+                     AND (
+                       relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+                       AND (
+                         has_table_privilege(
+                           rollup.oid,
+                           relation.oid,
+                           'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
+                         )
+                         OR has_any_column_privilege(
+                           rollup.oid,
+                           relation.oid,
+                           'SELECT, INSERT, UPDATE, REFERENCES'
+                         )
+                       )
+                       OR relation.relkind = 'S'
+                         AND has_sequence_privilege(
+                           rollup.oid,
+                           relation.oid,
+                           'USAGE, SELECT, UPDATE'
+                         )
+                     )
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_proc AS routine
+                   JOIN pg_namespace AS namespace
+                     ON namespace.oid = routine.pronamespace
+                   WHERE namespace.nspname <> 'information_schema'
+                     AND namespace.nspname !~ '^pg_'
+                     AND routine.prosecdef
+                     AND has_function_privilege(
+                       rollup.oid, routine.oid, 'EXECUTE'
+                     )
+                 )
+             ),
+             false
+           ),
            to_regclass('public.thought_revisions') IS NOT NULL
              AND to_regprocedure(
                'memory_scope.move_thought(uuid,text,text,memory_scope.visibility,text,text)'
@@ -355,9 +599,11 @@ export async function probeDbAtBoot(
         hasMetadataDegradationSchema,
         hasNativeAccessTokenSchema,
         hasAuthAuditSchema,
+        hasAuthAuditGrants,
         hasThoughtMutationSchema,
         hasSessionUpdateGrants,
       ] = schema.rows[0] ?? [
+        false,
         false,
         false,
         false,
@@ -432,6 +678,21 @@ export async function probeDbAtBoot(
             `shape on mcp_auth_events (outcome/door/subject/token_label + the ` +
             `row-shape constraint). Re-apply db/02-observability.sql (idempotent; ` +
             `it converges the table in place) before starting this server version.`,
+        );
+      }
+      // Version 1.25.0 separates auth-event insertion from retention. The app
+      // can still read/append its audit rows, but a dedicated standalone role
+      // is the only runtime identity allowed to delete them.
+      if (!hasAuthAuditGrants) {
+        throw new RequiredSchemaError(
+          `[db] Postgres at ${target} still has missing or widened auth-audit ` +
+            `grants. Provision openbrain_auth_rollup, apply ` +
+            `db/12-auth-audit-grants.sql as the database owner (it removes ` +
+            `owner-issued direct grant-option and CREATE drift), then run ` +
+            `db/03-grants-assertion.sql as a superuser. Explicitly remove any ` +
+            `reported openbrain_readonly membership, alternate-grantor schema ` +
+            `grant option, default ACL, inherited privilege, or ownership-based ` +
+            `source before starting this server version.`,
         );
       }
       // update_thought/move_thought (1.22.0) need the revision-history table

@@ -69,9 +69,11 @@ type RequiredSchema = [
   boolean,
   boolean,
   boolean,
+  boolean,
 ];
 
 const COMPLETE_SCHEMA: RequiredSchema = [
+  true,
   true,
   true,
   true,
@@ -124,7 +126,27 @@ Deno.test("probeDbAtBoot: success path validates connectivity and hybrid schema"
   assert(queries[1].includes("created_at"));
   assert(queries[1].includes("native_auth.access_token"));
   assert(queries[1].includes("mcp_auth_events"));
+  assert(queries[1].includes("mcp_auth_events_id_seq"));
   assert(queries[1].includes("mcp_auth_events_outcome_shape_check"));
+  assert(queries[1].includes("openbrain_auth_rollup"));
+  assert(queries[1].includes("UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER"));
+  assert(queries[1].includes("AS application_membership"));
+  assert(queries[1].includes("AS readonly_membership"));
+  assert(queries[1].includes("FROM pg_auth_members AS membership"));
+  assert(queries[1].includes("FROM pg_roles AS readonly"));
+  assert(queries[1].includes("FROM pg_class AS relation"));
+  assert(queries[1].includes("FROM pg_proc AS routine"));
+  assert(queries[1].includes("FROM pg_namespace AS usage_namespace"));
+  assert(queries[1].includes("aclexplode(usage_namespace.nspacl)"));
+  assert(queries[1].includes("usage_acl.privilege_type = 'USAGE'"));
+  assert(queries[1].includes("grantable_usage_acl.is_grantable"));
+  assert(queries[1].includes("FROM pg_default_acl AS rollup_default_acl"));
+  assert(queries[1].includes("aclexplode(guarded_relation.relacl)"));
+  assert(queries[1].includes("direct_acl.is_grantable"));
+  assert(queries[1].includes("has_sequence_privilege"));
+  assert(queries[1].includes("has_function_privilege"));
+  assert(queries[1].includes("has_schema_privilege"));
+  assert(queries[1].includes("has_database_privilege"));
   assert(queries[1].includes("public.thought_revisions"));
   assert(queries[1].includes("thought_revisions_app_head"));
   assert(queries[1].includes("sessions.session"));
@@ -163,6 +185,7 @@ Deno.test("probeDbAtBoot: missing hybrid schema rejects with migration guidance"
     true,
     true,
     true,
+    true,
   ]));
 
   const err = await assertRejects(
@@ -181,6 +204,7 @@ Deno.test("probeDbAtBoot: missing spaces schema rejects with migration guidance"
     true,
     true,
     false,
+    true,
     true,
     true,
     true,
@@ -216,6 +240,7 @@ Deno.test("probeDbAtBoot: missing audience indexes rejects before serving", asyn
     true,
     true,
     true,
+    true,
   ]));
 
   const err = await assertRejects(
@@ -239,6 +264,7 @@ Deno.test("probeDbAtBoot: missing native token schema rejects with migration gui
     true,
     true,
     false,
+    true,
     true,
     true,
     true,
@@ -272,6 +298,7 @@ Deno.test("probeDbAtBoot: pre-1.20 auth-audit table shape rejects with migration
     false,
     true,
     true,
+    true,
   ]));
 
   const err = await assertRejects(
@@ -283,10 +310,43 @@ Deno.test("probeDbAtBoot: pre-1.20 auth-audit table shape rejects with migration
   assertEquals(client.releaseCalls, 1);
 });
 
+Deno.test("probeDbAtBoot: widened auth-audit grants reject with migration guidance", async () => {
+  const { pool: fakePool, client } = makeFakePool(bootQueryHandler([
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false,
+    true,
+    true,
+  ]));
+
+  const err = await assertRejects(
+    () => probeDbAtBoot(fakePool, "db:5432"),
+    Error,
+  );
+  assertStringIncludes(err.message, "auth-audit grants");
+  assertStringIncludes(err.message, "openbrain_auth_rollup");
+  assertStringIncludes(err.message, "db/12-auth-audit-grants.sql");
+  assertStringIncludes(err.message, "db/03-grants-assertion.sql");
+  assertStringIncludes(err.message, "openbrain_readonly membership");
+  assertStringIncludes(err.message, "alternate-grantor schema grant option");
+  assertStringIncludes(err.message, "default ACL");
+  assertEquals(client.releaseCalls, 1);
+});
+
 Deno.test("probeDbAtBoot: missing thought-mutation schema rejects with migration guidance", async () => {
   // update_thought/move_thought would otherwise fail per call against an
   // otherwise healthy 1.22.0 server; the gate names the migration to apply.
   const { pool: fakePool, client } = makeFakePool(bootQueryHandler([
+    true,
     true,
     true,
     true,
@@ -326,6 +386,7 @@ Deno.test("probeDbAtBoot: widened session UPDATE grants reject with migration gu
     true,
     true,
     true,
+    true,
     false,
   ]));
 
@@ -350,6 +411,7 @@ Deno.test("probeDbAtBoot: missing or incomplete metadata audit schema rejects wi
     true,
     true,
     false,
+    true,
     true,
     true,
     true,
