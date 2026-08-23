@@ -439,9 +439,16 @@ docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postg
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/08-access-tokens.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/09-retire-corpus-funnel.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/10-thought-mutations.sql
+docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/11-session-update-grants.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/03-grants-assertion.sql
 docker compose --env-file .env build mcp log-ingester && docker compose --env-file .env up -d
 ```
+
+Upgrading to **1.24.0+**: `11-session-update-grants.sql` (database owner)
+removes table-wide session UPDATE, grants only the parent refresh/status
+columns, and removes artifact UPDATE entirely. The server boot probe refuses the
+historical grant shape; apply the migration and completed-catalog assertion
+before rolling the server.
 
 Upgrading to **1.22.0+**: `10-thought-mutations.sql` (superuser) adds the
 append-only `thought_revisions` history and the `memory_scope.move_thought`

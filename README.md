@@ -114,7 +114,7 @@ flowchart TB
     CL -- "HTTPS :443 via Funnel relay" --> TS
     CD -. "WireGuard (tailnet)" .-> TS
     CA -- "qubes.ConnectTCP (dom0-gated)<br/>Bearer JWT forwarded" --> MCP
-    MCP -- "qubes.ConnectTCP (dom0-gated)<br/>openbrain_app role:<br/>SELECT / INSERT / column-scoped UPDATE —<br/>no DELETE, no audience columns" --> PG
+    MCP -- "qubes.ConnectTCP (dom0-gated)<br/>openbrain_app role:<br/>SELECT / INSERT / column-scoped UPDATE —<br/>no thought DELETE; no audience-column UPDATE" --> PG
     LI -. "openbrain_ingester role:<br/>INSERT-only, unix socket<br/>(funnel_access_log)" .-> SK
 
     style ING fill:#d777571a,stroke:#d77757

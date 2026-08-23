@@ -153,6 +153,7 @@ sudo -u postgres psql -d openbrain -c "CREATE EXTENSION IF NOT EXISTS vector;"
 #   db/08-access-tokens.sql
 #   db/09-retire-corpus-funnel.sql
 #   db/10-thought-mutations.sql
+#   db/11-session-update-grants.sql
 #   db/03-grants-assertion.sql  # always last
 ```
 

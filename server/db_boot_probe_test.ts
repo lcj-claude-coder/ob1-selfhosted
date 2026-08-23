@@ -68,9 +68,11 @@ type RequiredSchema = [
   boolean,
   boolean,
   boolean,
+  boolean,
 ];
 
 const COMPLETE_SCHEMA: RequiredSchema = [
+  true,
   true,
   true,
   true,
@@ -125,6 +127,9 @@ Deno.test("probeDbAtBoot: success path validates connectivity and hybrid schema"
   assert(queries[1].includes("mcp_auth_events_outcome_shape_check"));
   assert(queries[1].includes("public.thought_revisions"));
   assert(queries[1].includes("thought_revisions_app_head"));
+  assert(queries[1].includes("sessions.session"));
+  assert(queries[1].includes("sessions.artifact"));
+  assert(queries[1].includes("has_any_column_privilege"));
   assert(
     queries[1].includes(
       "memory_scope.move_thought(uuid,text,text,memory_scope.visibility,text,text)",
@@ -144,6 +149,7 @@ Deno.test("probeDbAtBoot: missing hybrid schema rejects with migration guidance"
   const { pool: fakePool, client } = makeFakePool(bootQueryHandler([
     true,
     false,
+    true,
     true,
     true,
     true,
@@ -179,6 +185,7 @@ Deno.test("probeDbAtBoot: missing spaces schema rejects with migration guidance"
     true,
     true,
     true,
+    true,
   ]));
 
   const err = await assertRejects(
@@ -199,6 +206,7 @@ Deno.test("probeDbAtBoot: missing audience indexes rejects before serving", asyn
     true,
     true,
     false,
+    true,
     true,
     true,
     true,
@@ -230,6 +238,7 @@ Deno.test("probeDbAtBoot: missing native token schema rejects with migration gui
     false,
     true,
     true,
+    true,
   ]));
 
   const err = await assertRejects(
@@ -259,6 +268,7 @@ Deno.test("probeDbAtBoot: pre-1.20 auth-audit table shape rejects with migration
     true,
     false,
     true,
+    true,
   ]));
 
   const err = await assertRejects(
@@ -286,6 +296,7 @@ Deno.test("probeDbAtBoot: missing thought-mutation schema rejects with migration
     true,
     true,
     false,
+    true,
   ]));
 
   const err = await assertRejects(
@@ -295,6 +306,33 @@ Deno.test("probeDbAtBoot: missing thought-mutation schema rejects with migration
   assertStringIncludes(err.message, "thought_revisions");
   assertStringIncludes(err.message, "memory_scope.move_thought");
   assertStringIncludes(err.message, "db/10-thought-mutations.sql");
+  assertEquals(client.releaseCalls, 1);
+});
+
+Deno.test("probeDbAtBoot: widened session UPDATE grants reject with migration guidance", async () => {
+  const { pool: fakePool, client } = makeFakePool(bootQueryHandler([
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false,
+  ]));
+
+  const err = await assertRejects(
+    () => probeDbAtBoot(fakePool, "db:5432"),
+    Error,
+  );
+  assertStringIncludes(err.message, "session UPDATE grants");
+  assertStringIncludes(err.message, "db/11-session-update-grants.sql");
+  assertStringIncludes(err.message, "db/03-grants-assertion.sql");
   assertEquals(client.releaseCalls, 1);
 });
 
@@ -309,6 +347,7 @@ Deno.test("probeDbAtBoot: missing or incomplete metadata audit schema rejects wi
     true,
     true,
     false,
+    true,
     true,
     true,
     true,

@@ -284,7 +284,9 @@ export function createMcpServer(
     // 1.23.0: authenticated MCP requests at /mcp and / reject bodies over
     // 1 MiB before @hono/mcp buffers/parses JSON, including direct tailnet,
     // in-qube, and loopback paths that do not traverse the Funnel edge cap.
-    version: "1.23.0",
+    // 1.24.0: session recapture can update content only; database ACLs deny
+    // audience changes and direct artifact re-parenting (migration 11).
+    version: "1.24.0",
   });
 
   // ChatGPT-compatible search/fetch shapes (read-only). The standard names

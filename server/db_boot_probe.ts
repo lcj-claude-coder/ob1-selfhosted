@@ -90,6 +90,7 @@ export async function probeDbAtBoot(
         boolean,
         boolean,
         boolean,
+        boolean,
       ]>(
         `SELECT
            to_regclass('public.idx_thoughts_content_tsv') IS NOT NULL,
@@ -285,7 +286,50 @@ export async function probeDbAtBoot(
                    WHERE polrelid = revisions.oid
                      AND polname = 'thought_revisions_app_head'
                  )
-             )`,
+             ),
+           COALESCE(
+             to_regclass('sessions.session') IS NOT NULL
+             AND to_regclass('sessions.artifact') IS NOT NULL
+             AND NOT has_table_privilege(
+               current_user, to_regclass('sessions.session'), 'UPDATE'
+             )
+             AND NOT EXISTS (
+               SELECT 1
+               FROM (VALUES
+                 ('session_id'), ('title'), ('session_date'), ('goal'),
+                 ('agent'), ('agent_version'), ('harness'),
+                 ('machine'), ('working_dir'), ('repo_url'), ('branch'),
+                 ('head'), ('worktree'), ('started_at'), ('last_update'),
+                 ('ended_at'), ('status'), ('tags'), ('linked_issues'),
+                 ('related_sessions'), ('next_actions'), ('blockers'),
+                 ('resume_context'), ('summary'), ('source'), ('source_node'),
+                 ('raw_toml'), ('content_hash'), ('embedding'), ('updated_at')
+               ) AS required(attname)
+               WHERE NOT has_column_privilege(
+                 current_user,
+                 to_regclass('sessions.session'),
+                 required.attname,
+                 'UPDATE'
+               )
+             )
+             AND NOT EXISTS (
+               SELECT 1
+               FROM (VALUES
+                 ('id'), ('workspace_id'), ('project_id'), ('visibility'),
+                 ('owner_subject'), ('created_at')
+               ) AS protected(attname)
+               WHERE has_column_privilege(
+                 current_user,
+                 to_regclass('sessions.session'),
+                 protected.attname,
+                 'UPDATE'
+               )
+             )
+             AND NOT has_any_column_privilege(
+               current_user, to_regclass('sessions.artifact'), 'UPDATE'
+             ),
+             false
+           )`,
       );
       const [
         hasFtsIndex,
@@ -300,7 +344,9 @@ export async function probeDbAtBoot(
         hasNativeAccessTokenSchema,
         hasAuthAuditSchema,
         hasThoughtMutationSchema,
+        hasSessionUpdateGrants,
       ] = schema.rows[0] ?? [
+        false,
         false,
         false,
         false,
@@ -387,6 +433,18 @@ export async function probeDbAtBoot(
             `memory_scope.move_thought). Apply db/10-thought-mutations.sql as a ` +
             `PostgreSQL superuser (for example, postgres), then run ` +
             `db/03-grants-assertion.sql before starting this server version.`,
+        );
+      }
+      // Session capture never moves a row between audiences. Version 1.24.0
+      // makes that API contract a database-role invariant as well: parent
+      // UPDATE is content-column-only, and artifact reconciliation remains
+      // DELETE+INSERT with no direct re-parenting UPDATE.
+      if (!hasSessionUpdateGrants) {
+        throw new RequiredSchemaError(
+          `[db] Postgres at ${target} still has missing or widened session ` +
+            `UPDATE grants. Apply db/11-session-update-grants.sql as the ` +
+            `database owner, then run db/03-grants-assertion.sql before ` +
+            `starting this server version.`,
         );
       }
       // Only reference the ledger after to_regclass proved it exists. Putting

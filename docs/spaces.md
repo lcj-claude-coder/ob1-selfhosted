@@ -54,8 +54,9 @@ across audiences.
 Every operation addresses a row through its stored scope. A session recapture or
 status update, and a thought update or move, must name the row's CURRENT
 audience; supplying another scope gets the same not-found result as an unknown
-ID. Session audience is immutable through the application APIs; thoughts can be
-corrected and re-scoped in place — see
+ID. Session audience is immutable through the application APIs and, from server
+1.24.0, through the application role's column-scoped database grant; thoughts
+can be corrected and re-scoped in place — see
 [Correcting and moving thoughts](#correcting-and-moving-thoughts). There is no
 application-level delete for either.
 
@@ -300,18 +301,22 @@ docker compose exec -T postgres \
   < ../../db/10-thought-mutations.sql
 docker compose exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
+  < ../../db/11-session-update-grants.sql
+docker compose exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/03-grants-assertion.sql
 ```
 
-Migrations 07, 08, and 10 are the next required server schemas and are included
-here so the completed-catalog grant assertion remains last. 07 and 08 neither
-extend nor weaken the space boundary; see
+Migrations 07, 08, 10, and 11 are the next required server schemas and are
+included here so the completed-catalog grant assertion remains last. 07 and 08
+neither extend nor weaken the space boundary; see
 [Metadata degradation monitoring](metadata-degradation-monitoring.md) and
 [Native access tokens](native-access-tokens.md). 10 adds the head-gated revision
 history and the audience-move helper described in
 [Correcting and moving thoughts](#correcting-and-moving-thoughts); it also
 requires a superuser because the helper is a table-owner `SECURITY DEFINER`
-function.
+function. Migration 11 narrows session UPDATE to refresh/status content columns
+and removes direct artifact UPDATE; it is ACL-only and rewrites no rows.
 
 The migration backfills existing thoughts and sessions into the `default`
 workspace at workspace visibility. It takes table locks while adding and

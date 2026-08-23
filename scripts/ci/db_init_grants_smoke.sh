@@ -38,6 +38,40 @@ expect_rejected() {
 # after 02-observability.sql.
 run_assertion >/dev/null
 
+# Session UPDATE is intentionally narrower than the other session DML: parent
+# refresh/status columns only, and no artifact UPDATE at all. Prove the
+# completed-catalog assertion rejects both historical table-wide grants and a
+# hand-added audience/link column grant; migration 11 must converge each drift.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT UPDATE ON sessions.session TO openbrain_app"
+expect_rejected "session table-wide UPDATE" \
+  "table-wide UPDATE on sessions.session" "db/11-session-update-grants.sql"
+apply_sql db/11-session-update-grants.sql >/dev/null
+run_assertion >/dev/null
+
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT UPDATE (workspace_id) ON sessions.session TO openbrain_app"
+expect_rejected "session audience-column UPDATE" \
+  "sessions.session audience/identity column workspace_id"
+apply_sql db/11-session-update-grants.sql >/dev/null
+run_assertion >/dev/null
+
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT UPDATE ON sessions.artifact TO openbrain_app"
+expect_rejected "artifact table-wide UPDATE" \
+  "openbrain_app can UPDATE sessions.artifact" \
+  "session_pk cannot be rewritten"
+apply_sql db/11-session-update-grants.sql >/dev/null
+run_assertion >/dev/null
+
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT UPDATE (session_pk) ON sessions.artifact TO openbrain_app"
+expect_rejected "artifact parent-link UPDATE" \
+  "openbrain_app can UPDATE sessions.artifact" \
+  "session_pk cannot be rewritten"
+apply_sql db/11-session-update-grants.sql >/dev/null
+run_assertion >/dev/null
+
 # HBA introspection is superuser-restricted. A lower-privilege caller
 # gets the documented diagnostic before any partial catalog check.
 set +e
@@ -221,4 +255,4 @@ docker exec "$DB_INIT_CONTAINER" rm -f "$hba_role_file"
 super_psql -tAc "SELECT pg_reload_conf()" | grep -q t
 
 run_assertion >/dev/null
-echo "protected-role assertions accepted the clean catalog and rejected role attributes/membership, current and default PUBLIC access, PUBLIC SECURITY DEFINER execution, retired topology, and HBA drift"
+echo "protected-role assertions accepted the clean catalog and rejected session UPDATE widening, role attributes/membership, current and default PUBLIC access, PUBLIC SECURITY DEFINER execution, retired topology, and HBA drift"
