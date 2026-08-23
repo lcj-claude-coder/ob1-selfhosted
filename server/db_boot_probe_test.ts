@@ -133,8 +133,12 @@ Deno.test("probeDbAtBoot: success path validates connectivity and hybrid schema"
   assert(queries[1].includes("FROM pg_auth_members AS membership"));
   assert(queries[1].includes("FROM pg_class AS relation"));
   assert(queries[1].includes("FROM pg_proc AS routine"));
+  assert(queries[1].includes("aclexplode(guarded_relation.relacl)"));
+  assert(queries[1].includes("direct_acl.is_grantable"));
   assert(queries[1].includes("has_sequence_privilege"));
   assert(queries[1].includes("has_function_privilege"));
+  assert(queries[1].includes("has_schema_privilege"));
+  assert(queries[1].includes("has_database_privilege"));
   assert(queries[1].includes("public.thought_revisions"));
   assert(queries[1].includes("thought_revisions_app_head"));
   assert(queries[1].includes("sessions.session"));

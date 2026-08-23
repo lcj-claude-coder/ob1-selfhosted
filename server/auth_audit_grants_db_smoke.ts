@@ -61,15 +61,25 @@ async function cleanDrift(): Promise<void> {
   await adminSql(`
     REVOKE TRUNCATE, REFERENCES, TRIGGER
       ON public.mcp_auth_events FROM openbrain_app;
+    REVOKE GRANT OPTION FOR SELECT, INSERT
+      ON public.mcp_auth_events FROM openbrain_app CASCADE;
+    REVOKE SELECT (subject)
+      ON public.mcp_auth_events FROM openbrain_app CASCADE;
     REVOKE SELECT, UPDATE
       ON SEQUENCE public.mcp_auth_events_id_seq FROM openbrain_app;
+    REVOKE GRANT OPTION FOR USAGE
+      ON SEQUENCE public.mcp_auth_events_id_seq FROM openbrain_app CASCADE;
     GRANT USAGE
       ON SEQUENCE public.mcp_auth_events_id_seq TO openbrain_app;
 
     REVOKE INSERT, UPDATE, TRUNCATE, REFERENCES, TRIGGER
       ON public.mcp_auth_events FROM openbrain_auth_rollup;
+    REVOKE GRANT OPTION FOR SELECT, DELETE
+      ON public.mcp_auth_events FROM openbrain_auth_rollup CASCADE;
     REVOKE ALL
       ON SEQUENCE public.mcp_auth_events_id_seq FROM openbrain_auth_rollup;
+    REVOKE CREATE ON SCHEMA public FROM openbrain_auth_rollup CASCADE;
+    REVOKE CREATE ON DATABASE openbrain FROM openbrain_auth_rollup CASCADE;
     REVOKE SELECT ON public.thoughts FROM openbrain_auth_rollup;
     REVOKE EXECUTE ON FUNCTION ${privilegedMutation}
       FROM openbrain_auth_rollup;
@@ -119,6 +129,38 @@ const driftCases: DriftCase[] = [
       "GRANT TRUNCATE ON public.mcp_auth_events TO openbrain_auth_rollup",
     repair:
       "REVOKE TRUNCATE ON public.mcp_auth_events FROM openbrain_auth_rollup",
+  },
+  {
+    label: "rollup DELETE grant option",
+    introduce:
+      "GRANT DELETE ON public.mcp_auth_events TO openbrain_auth_rollup WITH GRANT OPTION",
+    repair:
+      "REVOKE GRANT OPTION FOR DELETE ON public.mcp_auth_events FROM openbrain_auth_rollup CASCADE",
+  },
+  {
+    label: "application column SELECT grant option",
+    introduce:
+      "GRANT SELECT (subject) ON public.mcp_auth_events TO openbrain_app WITH GRANT OPTION",
+    repair:
+      "REVOKE SELECT (subject) ON public.mcp_auth_events FROM openbrain_app CASCADE",
+  },
+  {
+    label: "application sequence USAGE grant option",
+    introduce:
+      "GRANT USAGE ON SEQUENCE public.mcp_auth_events_id_seq TO openbrain_app WITH GRANT OPTION",
+    repair:
+      "REVOKE GRANT OPTION FOR USAGE ON SEQUENCE public.mcp_auth_events_id_seq FROM openbrain_app CASCADE",
+  },
+  {
+    label: "rollup schema creation",
+    introduce: "GRANT CREATE ON SCHEMA public TO openbrain_auth_rollup",
+    repair: "REVOKE CREATE ON SCHEMA public FROM openbrain_auth_rollup CASCADE",
+  },
+  {
+    label: "rollup database creation",
+    introduce: "GRANT CREATE ON DATABASE openbrain TO openbrain_auth_rollup",
+    repair:
+      "REVOKE CREATE ON DATABASE openbrain FROM openbrain_auth_rollup CASCADE",
   },
   {
     label: "rollup sequence access",

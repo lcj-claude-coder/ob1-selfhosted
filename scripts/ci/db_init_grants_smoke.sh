@@ -134,6 +134,63 @@ expect_rejected "auth rollup column drift before observability replay" \
 apply_sql db/02-observability.sql >/dev/null
 run_assertion >/dev/null
 
+# Allowed effective privileges must still be non-delegable. Exercise relation,
+# column, and sequence ACLs, including the concrete DELETE delegation route;
+# migration 12 must remove both grant options and dependent grants.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT DELETE ON public.mcp_auth_events
+     TO openbrain_auth_rollup WITH GRANT OPTION"
+expect_rejected "auth rollup DELETE grant option" \
+  "auth-audit privileges must not carry WITH GRANT OPTION" \
+  "openbrain_auth_rollup"
+super_psql -v ON_ERROR_STOP=1 -c \
+  "SET ROLE openbrain_auth_rollup;
+   GRANT DELETE ON public.mcp_auth_events TO openbrain_readonly;
+   RESET ROLE"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+super_psql -tAc \
+  "SELECT NOT has_table_privilege(
+     'openbrain_readonly', 'public.mcp_auth_events', 'DELETE'
+   )" | grep -q t
+run_assertion >/dev/null
+
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT SELECT (subject) ON public.mcp_auth_events
+     TO openbrain_app WITH GRANT OPTION"
+expect_rejected "application audit column grant option" \
+  "auth-audit privileges must not carry WITH GRANT OPTION" \
+  "public.mcp_auth_events.subject"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+run_assertion >/dev/null
+
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT USAGE ON SEQUENCE public.mcp_auth_events_id_seq
+     TO openbrain_app WITH GRANT OPTION"
+expect_rejected "application audit sequence grant option" \
+  "auth-audit privileges must not carry WITH GRANT OPTION" \
+  "mcp_auth_events_id_seq"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+run_assertion >/dev/null
+
+# Effective CREATE on either an application schema or the current database can
+# persist objects beyond the rollup's one-table ACL. Both gates reject these
+# routes, and the advertised migration converges direct grant drift.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT CREATE ON SCHEMA public TO openbrain_auth_rollup"
+expect_rejected "auth rollup schema CREATE" \
+  "openbrain_auth_rollup can create persistent corpus objects" \
+  "schema public"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+run_assertion >/dev/null
+
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT CREATE ON DATABASE $POSTGRES_DB TO openbrain_auth_rollup"
+expect_rejected "auth rollup database CREATE" \
+  "openbrain_auth_rollup can create persistent corpus objects" \
+  "database $POSTGRES_DB"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+run_assertion >/dev/null
+
 smoke_step "Smoke test — boot probe rejects auth-audit grant drift"
 run_deno_db_smoke server/auth_audit_grants_db_smoke.ts
 
@@ -405,4 +462,4 @@ docker exec "$DB_INIT_CONTAINER" rm -f "$hba_role_file"
 super_psql -tAc "SELECT pg_reload_conf()" | grep -q t
 
 run_assertion >/dev/null
-echo "protected-role assertions accepted the clean catalog and rejected auth-audit mutation/rollup drift, session UPDATE widening, role attributes/membership, current and default PUBLIC access, PUBLIC SECURITY DEFINER execution, retired topology, and HBA drift"
+echo "protected-role assertions accepted the clean catalog and rejected auth-audit mutation/delegation/object-creation drift, session UPDATE widening, role attributes/membership, current and default PUBLIC access, PUBLIC SECURITY DEFINER execution, retired topology, and HBA drift"

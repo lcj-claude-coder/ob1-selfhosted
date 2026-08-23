@@ -328,7 +328,9 @@ requires a superuser because the helper is a table-owner `SECURITY DEFINER`
 function. Migration 11 narrows session UPDATE to refresh/status content columns
 and removes direct artifact UPDATE; it is ACL-only and rewrites no rows.
 Migration 12 separates request-path auth-event insertion from the dedicated
-report/retention role and likewise rewrites no rows.
+report/retention role, removes direct grant-option and persistent-object
+creation drift (including dependent delegated grants), and likewise rewrites no
+rows.
 
 The migration backfills existing thoughts and sessions into the `default`
 workspace at workspace visibility. It takes table locks while adding and

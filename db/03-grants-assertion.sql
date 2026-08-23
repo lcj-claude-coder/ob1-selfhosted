@@ -62,8 +62,9 @@
 --       dumpable by the read-only role, under forced head-gated RLS, and the
 --       audience-move helper is a table-owner-owned, fixed-search-path
 --       SECURITY DEFINER function executable only by the app.
---   (i) auth-decision history is SELECT/INSERT-only to the app, while a
---       standalone corpus rollup role has SELECT/DELETE on that table alone.
+--   (i) auth-decision history is non-delegable SELECT/INSERT-only to the app,
+--       while a standalone corpus rollup role has non-delegable SELECT/DELETE
+--       on that table alone and no persistent-object creation route.
 --
 -- The openbrain_app content/audience checks are deliberately scoped to thoughts
 -- and sessions: 02-observability.sql legitimately grants it access to other
@@ -519,8 +520,9 @@ $$ LANGUAGE plpgsql;
 
 -- Auth-decision audit invariants. The request-path credential may append and
 -- read rows but cannot rewrite or erase them. Retention/reporting is isolated
--- in a standalone login role with SELECT/DELETE on this one table and no
--- sequence, corpus, or privileged-function access.
+-- in a standalone login role with non-delegable SELECT/DELETE on this one
+-- table and no sequence, persistent-object, corpus, or privileged-function
+-- access.
 DO $$
 DECLARE
   audit_table oid := to_regclass('public.mcp_auth_events');
@@ -603,6 +605,53 @@ BEGIN
       'grants assertion failed: openbrain_auth_rollup must have SELECT/DELETE only on public.mcp_auth_events and no sequence access.';
   END IF;
 
+  -- Effective-privilege helpers intentionally collapse ordinary grants and
+  -- WITH GRANT OPTION. Inspect direct relation/column ACLs as well so neither
+  -- runtime identity can delegate its otherwise-allowed audit access.
+  SELECT string_agg(grantable.description, ', ' ORDER BY grantable.description)
+    INTO bad
+  FROM (
+    SELECT format(
+             '%s on %I.%I to %s',
+             acl.privilege_type,
+             namespace.nspname,
+             relation.relname,
+             acl.grantee::regrole::text
+           ) AS description
+    FROM pg_class relation
+    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+    CROSS JOIN LATERAL aclexplode(relation.relacl) acl
+    WHERE relation.oid = ANY (ARRAY[audit_table, audit_sequence])
+      AND acl.grantee = ANY (ARRAY[app_oid, rollup_oid])
+      AND acl.is_grantable
+
+    UNION ALL
+
+    SELECT format(
+             '%s on %I.%I.%I to %s',
+             acl.privilege_type,
+             namespace.nspname,
+             relation.relname,
+             attribute.attname,
+             acl.grantee::regrole::text
+           ) AS description
+    FROM pg_attribute attribute
+    JOIN pg_class relation ON relation.oid = attribute.attrelid
+    JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+    CROSS JOIN LATERAL aclexplode(attribute.attacl) acl
+    WHERE attribute.attrelid = audit_table
+      AND attribute.attnum > 0
+      AND NOT attribute.attisdropped
+      AND attribute.attacl IS NOT NULL
+      AND acl.grantee = ANY (ARRAY[app_oid, rollup_oid])
+      AND acl.is_grantable
+  ) grantable;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: auth-audit privileges must not carry WITH GRANT OPTION: %. Apply db/12-auth-audit-grants.sql.',
+      bad;
+  END IF;
+
   IF NOT has_table_privilege(readonly_oid, audit_table, 'SELECT')
      OR has_table_privilege(
        readonly_oid, audit_table,
@@ -614,6 +663,29 @@ BEGIN
      ) THEN
     RAISE EXCEPTION
       'grants assertion failed: openbrain_readonly cannot safely dump auth audit history.';
+  END IF;
+
+  -- CREATE on any application schema or on the database would let the rollup
+  -- persist helper objects outside the direct relation scan below. Check
+  -- effective privileges so PUBLIC, ownership, and membership routes count.
+  SELECT string_agg(
+           format('schema %I', namespace.nspname),
+           ', ' ORDER BY namespace.nspname
+         )
+    INTO bad
+  FROM pg_namespace namespace
+  WHERE namespace.nspname <> 'information_schema'
+    AND namespace.nspname !~ '^pg_'
+    AND has_schema_privilege(rollup_oid, namespace.oid, 'CREATE');
+  IF has_database_privilege(
+       rollup_oid, current_database(), 'CREATE'
+     ) THEN
+    bad := concat_ws(', ', format('database %I', current_database()), bad);
+  END IF;
+  IF bad IS NOT NULL THEN
+    RAISE EXCEPTION
+      'grants assertion failed: openbrain_auth_rollup can create persistent corpus objects via: %. Apply db/12-auth-audit-grants.sql; if the privilege is inherited or ownership-based, remove that source explicitly.',
+      bad;
   END IF;
 
   -- The retention credential must not become a sideways corpus credential.

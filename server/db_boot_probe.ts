@@ -289,8 +289,9 @@ export async function probeDbAtBoot(
                AND conname = 'mcp_auth_events_outcome_shape_check'
              ),
            -- Mirror db/03's security-relevant auth-audit boundary at boot:
-           -- exact app table/sequence rights and a standalone rollup with no
-           -- sideways relation, sequence, membership, or definer-function path.
+           -- exact non-delegable app table/sequence rights and a standalone
+           -- rollup with no persistent-object, sideways relation, sequence,
+           -- membership, or definer-function path.
            COALESCE(
              to_regclass('public.mcp_auth_events') IS NOT NULL
              AND to_regclass('public.mcp_auth_events_id_seq') IS NOT NULL
@@ -360,6 +361,49 @@ export async function probeDbAtBoot(
                    rollup.oid,
                    to_regclass('public.mcp_auth_events_id_seq'),
                    'USAGE, SELECT, UPDATE'
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM (
+                     SELECT acl.grantee, acl.is_grantable
+                     FROM pg_class AS guarded_relation
+                     CROSS JOIN LATERAL
+                       aclexplode(guarded_relation.relacl) AS acl
+                     WHERE guarded_relation.oid = ANY (ARRAY[
+                       to_regclass('public.mcp_auth_events'),
+                       to_regclass('public.mcp_auth_events_id_seq')
+                     ])
+
+                     UNION ALL
+
+                     SELECT acl.grantee, acl.is_grantable
+                     FROM pg_attribute AS guarded_column
+                     CROSS JOIN LATERAL
+                       aclexplode(guarded_column.attacl) AS acl
+                     WHERE guarded_column.attrelid =
+                           to_regclass('public.mcp_auth_events')
+                       AND guarded_column.attnum > 0
+                       AND NOT guarded_column.attisdropped
+                       AND guarded_column.attacl IS NOT NULL
+                   ) AS direct_acl
+                   WHERE direct_acl.grantee IN (
+                     to_regrole(current_user)::oid,
+                     rollup.oid
+                   )
+                     AND direct_acl.is_grantable
+                 )
+                 AND NOT has_database_privilege(
+                   rollup.oid, current_database(), 'CREATE'
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_namespace AS creatable_namespace
+                   WHERE creatable_namespace.nspname <>
+                         'information_schema'
+                     AND creatable_namespace.nspname !~ '^pg_'
+                     AND has_schema_privilege(
+                       rollup.oid, creatable_namespace.oid, 'CREATE'
+                     )
                  )
                  AND NOT EXISTS (
                    SELECT 1
@@ -563,8 +607,10 @@ export async function probeDbAtBoot(
         throw new RequiredSchemaError(
           `[db] Postgres at ${target} still has missing or widened auth-audit ` +
             `grants. Provision openbrain_auth_rollup, apply ` +
-            `db/12-auth-audit-grants.sql as the database owner, then run ` +
-            `db/03-grants-assertion.sql before starting this server version.`,
+            `db/12-auth-audit-grants.sql as the database owner (it removes ` +
+            `direct grant-option and CREATE drift), then run ` +
+            `db/03-grants-assertion.sql to identify any inherited or ` +
+            `ownership-based source before starting this server version.`,
         );
       }
       // update_thought/move_thought (1.22.0) need the revision-history table
