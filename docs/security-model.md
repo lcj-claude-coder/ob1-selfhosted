@@ -71,8 +71,8 @@ dumps can still read it.
 - In Pattern B the override file **removes** mcp's host port
   (`ports: !reset null`). The raw backend is unreachable from the host, so a
   misconfigured `tailscale funnel` pointed at `:8787` fails closed instead of
-  reaching mcp directly past the Caddy perimeter (IP allowlist, body cap,
-  logging).
+  reaching mcp directly past the Caddy perimeter (IP allowlist, pre-auth Funnel
+  body cap, logging).
 - **Primary public perimeter — the Anthropic IP allowlist.** Caddy's funnel
   branch enforces `client_ip 160.79.104.0/21` (XFF-resolved), with
   `trusted_proxies static private_ranges` + `trusted_proxies_strict` so
@@ -175,8 +175,11 @@ dumps can still read it.
   credentials or header values.
 - Captured content is hard-capped (100,000 UTF-8 bytes) on both
   `capture_thought` and `session_capture`; the REST gateway enforces the
-  identical cap via the same shared schema module, plus a 1 MiB request-body
-  limit for tailnet-direct callers that have no Caddy edge in front of them.
+  identical cap via the same shared schema module. Both REST and the MCP
+  transport apply a shared 1 MiB request-body limit after authentication, so
+  tailnet-direct, in-qube, and loopback callers remain bounded without a Caddy
+  edge. Public Funnel traffic additionally meets Caddy's cap before it reaches
+  application authentication.
 - Session provenance (`source`, `source_node`) is stamped server-side from the
   credential context; caller-supplied values are ignored. Thought transport
   provenance (`metadata.source`, `door`, `sub`, `token_label`) and classifier

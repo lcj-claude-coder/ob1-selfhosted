@@ -336,10 +336,10 @@ export const UNAUTHORIZED_MESSAGE =
   "Unauthorized: missing or invalid authentication.";
 
 // Hard cap on the body we'll buffer just to extract a JSON-RPC `id` from
-// an unauthorized request. Caddy is the primary body-size enforcer in
-// the production topology  but on dev / single-port runs we
-// have no edge — this cap is defense in depth so an attacker can't make
-// us buffer an arbitrarily large body on the auth-failure path. 64 KiB
+// an unauthorized request. Public Funnel traffic also meets Caddy's pre-auth
+// edge cap, while direct/private paths do not. This smaller application cap
+// protects the auth-failure path in every topology so an attacker can't make
+// us buffer an arbitrarily large body. 64 KiB
 // is well above any legitimate JSON-RPC request and well below any DoS
 // threshold. This is a hardening over the upstream port (which has no
 // cap); see PR body for rationale.
