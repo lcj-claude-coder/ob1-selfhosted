@@ -60,11 +60,6 @@ import {
 } from "./services.ts";
 import { MAX_REQUEST_BODY_BYTES } from "./request_body_limit.ts";
 
-// Cap REST bodies at the shared 1 MiB application limit — parity with MCP and
-// the funnel-only request_body cap in the Caddyfile, and a real bound for
-// tailnet-direct callers who have no edge in front of them (c.req.json() would
-// otherwise buffer unbounded bodies before Zod ever runs). Far above the 100k
-// UTF-8 content cap, so no legitimate request gets near it.
 type ApiContext = Context<{ Variables: AppVariables }>;
 
 function errorJson(
@@ -163,6 +158,10 @@ export function createApiRouter(
   // body cap runs only for authenticated requests.
   api.use("*", restifyAuthFailure);
   api.use("*", authMiddleware);
+  // Cap REST bodies at the shared 1 MiB application limit, matching MCP and
+  // bounding tailnet-direct callers that have no Caddy edge. This runs before
+  // c.req.json() can buffer unbounded input and remains far above the 100k
+  // UTF-8 content cap.
   api.use(
     "*",
     bodyLimit({
