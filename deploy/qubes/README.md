@@ -287,8 +287,8 @@ dom0-policy-gated qubes.ConnectTCP channel
 and mcp's app auth authenticates what arrives. The app qube is the trusted DB
 control-plane, so its `.env` holds the admin + app + auth-rollup + readonly
 passwords (never the ingester credential); it also runs the encrypted corpus
-backup and pulls the Funnel aggregate over a separate fixed qrexec service before encrypting it
-([`app-qube/backup/`](app-qube/backup/)). Full recipe in
+backup and pulls the Funnel aggregate over a separate fixed qrexec service
+before encrypting it ([`app-qube/backup/`](app-qube/backup/)). Full recipe in
 [`app-qube/README.md`](app-qube/README.md):
 
 ```sh

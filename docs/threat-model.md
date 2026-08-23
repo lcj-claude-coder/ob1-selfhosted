@@ -29,11 +29,11 @@ disagree, the linked doc wins and the disagreement is a bug.
   the node identity in [`funnel-mcp-perimeter.md`](funnel-mcp-perimeter.md).
 - **Audit integrity** — Caddy's access logs, `funnel_access_log`,
   `mcp_auth_events`, `thought_revisions`, and `metadata_degradation_events`: the
-  evidence trail of what reached the doors and whether classification degraded
-  — request metadata, reason-coded auth failures, content-free classifier
-  events, and per-write door/`sub`/native-token-label attribution. It shows who
-  knocked and what was written, not every read of the store: there is no
-  per-tool or per-row read audit.
+  evidence trail of what reached the doors and whether classification degraded —
+  request metadata, reason-coded auth failures, content-free classifier events,
+  and per-write door/`sub`/native-token-label attribution. It shows who knocked
+  and what was written, not every read of the store: there is no per-tool or
+  per-row read audit.
 
 ## Attackers and entry points
 
@@ -153,8 +153,8 @@ configuration this project is built not to foreclose. The full comparison table
   normal callers and application query omissions, not a compromised MCP process.
   ([`spaces.md`](spaces.md#enforcement-and-search))
 - **Thought-revision attribution is application-trusted.** The app role cannot
-  rewrite or erase landed revision rows, but it can append fabricated history
-  or actor fields. Database-enforced provenance is deferred because custom GUCs
+  rewrite or erase landed revision rows, but it can append fabricated history or
+  actor fields. Database-enforced provenance is deferred because custom GUCs
   remain app-settable and a meaningful fix requires privileged mutation
   functions/triggers plus a non-forgeable request-identity channel.
   ([`security-model.md` § Known limitations](security-model.md#known-limitations))

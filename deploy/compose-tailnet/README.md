@@ -103,10 +103,9 @@ Copy your filled-in `.env` into this directory (including the required
 `METADATA_FALLBACK_POLICY`; Pattern B also needs the `AUTH0_*` trio,
 `OPENBRAIN_INGESTER_PASSWORD`, `LOG_SINK_SUPERUSER_PASSWORD`,
 `OPENBRAIN_LOGS_ROLLUP_PASSWORD`, `OPENBRAIN_AUTH_ROLLUP_PASSWORD`, and an
-absolute `LOG_SINK_SOCKET_DIR`; set
-`OPENBRAIN_LOGS_BACKUP_PASSWORD` only when installing an aggregate backup) and
-uncomment `COMPOSE_FILE` + `COMPOSE_PROFILES` at its bottom. Then either run
-with explicit flags:
+absolute `LOG_SINK_SOCKET_DIR`; set `OPENBRAIN_LOGS_BACKUP_PASSWORD` only when
+installing an aggregate backup) and uncomment `COMPOSE_FILE` +
+`COMPOSE_PROFILES` at its bottom. Then either run with explicit flags:
 
 ```bash
 cd deploy/compose-tailnet
@@ -552,9 +551,9 @@ A non-zero exit means a completed-catalog invariant failed. Prefer a targeted
 fix (e.g. `REVOKE DELETE ON public.thoughts FROM openbrain_app;`). To re-sync
 wholesale on 1.25.0+, provision `openbrain_auth_rollup` first with the helper
 used in the upgrade block above, then re-apply `01-schema.sql` →
-`02-observability.sql`, apply pending numbered migrations `04` through `12`,
-and run `03-grants-assertion.sql` **last** — never `01` alone, since its
-REVOKE-all block strips observability grants until `02` restores them.
+`02-observability.sql`, apply pending numbered migrations `04` through `12`, and
+run `03-grants-assertion.sql` **last** — never `01` alone, since its REVOKE-all
+block strips observability grants until `02` restores them.
 
 To retire the unused historical thought-search RPC without a full schema replay,
 run

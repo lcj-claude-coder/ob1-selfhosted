@@ -262,13 +262,13 @@ docker compose up -d --no-deps mcp
 
 Upgrading to **1.25.0+** adds a dedicated `openbrain_auth_rollup` login for the
 auth-event report and retention pass. Set its new password, run the role helper
-while the current server is still live, then apply
-`12-auth-audit-grants.sql`. The migration removes auth-event UPDATE/DELETE from
-`openbrain_app`, grants the new role SELECT/DELETE on that table alone, and is
-safe to reapply. The boot probe and final assertion reject both the historical
-broad app grant and an over-privileged rollup role. The controlled Postgres
-recreation at the end preserves the named data volume and makes the new
-credential available to the Compose-backed summary job.
+while the current server is still live, then apply `12-auth-audit-grants.sql`.
+The migration removes auth-event UPDATE/DELETE from `openbrain_app`, grants the
+new role SELECT/DELETE on that table alone, and is safe to reapply. The boot
+probe and final assertion reject both the historical broad app grant and an
+over-privileged rollup role. The controlled Postgres recreation at the end
+preserves the named data volume and makes the new credential available to the
+Compose-backed summary job.
 
 Migration 09 is the Arc B corpus boundary. On an older data directory it refuses
 to drop either legacy Funnel table while it contains a row. If this database

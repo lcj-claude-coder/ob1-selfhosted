@@ -169,15 +169,14 @@ wrong tool once the point is to put a VM boundary between two of them.
   binds loopback only; the ingress qube reaches it exclusively over the
   dom0-policy-gated qubes.ConnectTCP channel. As the trusted DB control-plane it
   holds the admin + app + auth-rollup + readonly credentials and runs both
-  encrypted off-box
-  backups: the corpus dump and the bounded aggregate-only pull
+  encrypted off-box backups: the corpus dump and the bounded aggregate-only pull
   ([`app-qube/backup/`](app-qube/backup/)).
 - **DB qube** — Postgres + pgvector, **out of docker-compose**, run natively (or
   as a single container), bound to loopback only. Reached by the app qube alone
   (the full app role, auth-rollup for bounded audit retention, readonly for
   backups, and the superuser for remote admin) over the dom0-gated
-  qubes.ConnectTCP channel; no other qube can even
-  open the channel, and there is no network listener to route to.
+  qubes.ConnectTCP channel; no other qube can even open the channel, and there
+  is no network listener to route to.
 
 The minimum viable step, if the full split slips: get Postgres out of the
 Funnel-exposed qube. Edge compromise ≠ memory-store compromise is most of the

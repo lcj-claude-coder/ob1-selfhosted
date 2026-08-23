@@ -142,8 +142,8 @@ still restricted by memory-space RLS) — see
 app qube also connects as `openbrain_app` (mcp writes thoughts and auth
 decisions), `openbrain_auth_rollup` (the
 [daily rollup](#daily-auth-event-rollup-and-retention-host-side) reports and
-retires auth events), and `openbrain_readonly` (the backup job). It does
-**not** carry the log-ingester credential — that lives only on the ingress qube.
+retires auth events), and `openbrain_readonly` (the backup job). It does **not**
+carry the log-ingester credential — that lives only on the ingress qube.
 
 OAuth's verified `sub` supplies personal identity automatically. The seeded
 `sensitive` workspace is therefore available without a shared-key principal:
@@ -235,8 +235,8 @@ empty, so the only values it can see are the two named on that line — every
 `$DB_HOST`-style expansion happens in the parent shell before `env` runs, so the
 arguments are unaffected. The app, auth-rollup, and read-only role passwords,
 the model API keys, and the notification credentials never reach the client
-process, and nothing survives in the operator's shell once the subshell
-returns. This is the rule the backup job states in
+process, and nothing survives in the operator's shell once the subshell returns.
+This is the rule the backup job states in
 [`backup/backup.env.example`](backup/backup.env.example): only what the client
 needs reaches the client.
 
@@ -321,9 +321,9 @@ version. Apply migrations before the roll, not with it.
    this one for compose and the rollup, the ingress qube for the Funnel monitor.
 4. Reconcile `.env` against `.env.example`. `docker compose config --quiet` is a
    cheap dry run — it fails on a missing required variable without touching the
-   running container. For 1.25.0+, add a fresh
-   `OPENBRAIN_AUTH_ROLLUP_PASSWORD`, install/reload the current db-qube HBA
-   snippet, and provision or rotate the role while the old MCP is still live:
+   running container. For 1.25.0+, add a fresh `OPENBRAIN_AUTH_ROLLUP_PASSWORD`,
+   install/reload the current db-qube HBA snippet, and provision or rotate the
+   role while the old MCP is still live:
 
    ```bash
    bash scripts/upgrade-enable-auth-rollup-role.sh deploy/qubes/app-qube
