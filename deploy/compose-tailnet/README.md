@@ -431,10 +431,14 @@ stays on those commands for invocation consistency; it becomes load-bearing on
 while the current MCP is still serving, then quiesce MCP before replaying
 `04-sessions.sql`: its narrowed grants are incompatible with pre-1.24 session
 recapture SQL. Leave MCP stopped if any migration or the final assertion fails.
-The spaces migration is not a cheap no-op on reapplication; it rebuilds its
-fingerprint index each time:
+The block is a fail-fast subshell: `set -e` prevents `stop` after a failed build
+and prevents `up` after any failed stop, migration, or assertion. The spaces
+migration is not a cheap no-op on reapplication; it rebuilds its fingerprint
+index each time:
 
 ```bash
+(
+set -e
 docker compose --env-file .env build mcp log-ingester
 docker compose --env-file .env stop mcp
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/02-observability.sql
@@ -448,6 +452,7 @@ docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postg
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/11-session-update-grants.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/03-grants-assertion.sql
 docker compose --env-file .env up -d
+)
 ```
 
 Upgrading to **1.24.0+**: `11-session-update-grants.sql` (database owner)

@@ -8,7 +8,12 @@
 // reconciliation, and status updates still execute while direct session
 // audience writes and artifact re-parenting are denied by ACLs.
 
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { Pool } from "postgres";
 import type { PoolClient } from "postgres";
 
@@ -33,6 +38,7 @@ const {
 } = await import("./session_queries.ts");
 const { parseSessionToml } = await import("./session_toml.ts");
 const { withScopeClient } = await import("./scoped_db.ts");
+const { probeDbAtBoot } = await import("./db_boot_probe.ts");
 
 const database = "openbrain";
 const TITLE_PREFIX = "__session_grants_db_smoke";
@@ -83,6 +89,16 @@ async function cleanFixture(): Promise<void> {
   });
 }
 
+async function cleanBootProbeDrift(): Promise<void> {
+  await withAdmin(async (client) => {
+    await client.queryArray(
+      `ALTER TABLE sessions.session
+       DROP COLUMN IF EXISTS __session_grants_boot_drift`,
+    );
+  });
+}
+
+await cleanBootProbeDrift();
 await cleanFixture();
 try {
   const initialToml = `+++
@@ -207,10 +223,36 @@ detail = "delete-and-reinsert path"
     "permission denied",
   );
 
+  // Model drift introduced after the completed-catalog assertion ran. A new
+  // UPDATE-capable column is outside the boot probe's positive allowlist and
+  // must therefore refuse every restart until the drift is removed.
+  await withAdmin(async (client) => {
+    await client.queryArray(
+      `ALTER TABLE sessions.session
+       ADD COLUMN __session_grants_boot_drift text`,
+    );
+    await client.queryArray(
+      `GRANT UPDATE (__session_grants_boot_drift)
+       ON sessions.session TO openbrain_app`,
+    );
+  });
+  try {
+    const bootError = await assertRejects(
+      () => probeDbAtBoot(appPool, "session-grants-smoke"),
+      Error,
+    );
+    assertStringIncludes(bootError.message, "session UPDATE grants");
+    assertStringIncludes(bootError.message, "unexpected live column grant");
+  } finally {
+    await cleanBootProbeDrift();
+  }
+  await probeDbAtBoot(appPool, "session-grants-smoke");
+
   console.log(
-    "session grant smoke: capture, refresh, artifact reconciliation, status, and ACL denials passed",
+    "session grant smoke: capture, refresh, artifact reconciliation, status, ACL denials, and boot allowlist passed",
   );
 } finally {
+  await cleanBootProbeDrift();
   await cleanFixture();
   await appPool.end();
   await adminPool.end();

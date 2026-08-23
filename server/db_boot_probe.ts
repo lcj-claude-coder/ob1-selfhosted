@@ -77,6 +77,11 @@ export async function probeDbAtBoot(
     const client = await pool.connect();
     try {
       await client.queryArray("SELECT 1");
+      // Keep the session UPDATE contract as one positive allowlist inside the
+      // catalog query. Every listed column must remain writable, and every
+      // other live column must remain non-writable; a future column-level grant
+      // therefore fails boot without waiting for the next standalone db/03
+      // assertion run.
       const schema = await client.queryArray<[
         boolean,
         boolean,
@@ -92,7 +97,18 @@ export async function probeDbAtBoot(
         boolean,
         boolean,
       ]>(
-        `SELECT
+        `WITH session_update_columns(attname) AS (
+           VALUES
+             ('session_id'::text), ('title'), ('session_date'), ('goal'),
+             ('agent'), ('agent_version'), ('harness'),
+             ('machine'), ('working_dir'), ('repo_url'), ('branch'),
+             ('head'), ('worktree'), ('started_at'), ('last_update'),
+             ('ended_at'), ('status'), ('tags'), ('linked_issues'),
+             ('related_sessions'), ('next_actions'), ('blockers'),
+             ('resume_context'), ('summary'), ('source'), ('source_node'),
+             ('raw_toml'), ('content_hash'), ('embedding'), ('updated_at')
+         )
+         SELECT
            to_regclass('public.idx_thoughts_content_tsv') IS NOT NULL,
            to_regclass('public.idx_thoughts_content_trgm') IS NOT NULL,
            to_regclass('memory_scope.workspace') IS NOT NULL
@@ -295,16 +311,7 @@ export async function probeDbAtBoot(
              )
              AND NOT EXISTS (
                SELECT 1
-               FROM (VALUES
-                 ('session_id'), ('title'), ('session_date'), ('goal'),
-                 ('agent'), ('agent_version'), ('harness'),
-                 ('machine'), ('working_dir'), ('repo_url'), ('branch'),
-                 ('head'), ('worktree'), ('started_at'), ('last_update'),
-                 ('ended_at'), ('status'), ('tags'), ('linked_issues'),
-                 ('related_sessions'), ('next_actions'), ('blockers'),
-                 ('resume_context'), ('summary'), ('source'), ('source_node'),
-                 ('raw_toml'), ('content_hash'), ('embedding'), ('updated_at')
-               ) AS required(attname)
+               FROM session_update_columns AS required
                WHERE NOT has_column_privilege(
                  current_user,
                  to_regclass('sessions.session'),
@@ -314,16 +321,21 @@ export async function probeDbAtBoot(
              )
              AND NOT EXISTS (
                SELECT 1
-               FROM (VALUES
-                 ('id'), ('workspace_id'), ('project_id'), ('visibility'),
-                 ('owner_subject'), ('created_at')
-               ) AS protected(attname)
-               WHERE has_column_privilege(
-                 current_user,
-                 to_regclass('sessions.session'),
-                 protected.attname,
-                 'UPDATE'
-               )
+               FROM pg_attribute AS live_column
+               WHERE live_column.attrelid = to_regclass('sessions.session')
+                 AND live_column.attnum > 0
+                 AND NOT live_column.attisdropped
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM session_update_columns AS allowed
+                   WHERE allowed.attname = live_column.attname::text
+                 )
+                 AND has_column_privilege(
+                   current_user,
+                   live_column.attrelid,
+                   live_column.attname,
+                   'UPDATE'
+                 )
              )
              AND NOT has_any_column_privilege(
                current_user, to_regclass('sessions.artifact'), 'UPDATE'
@@ -442,9 +454,10 @@ export async function probeDbAtBoot(
       if (!hasSessionUpdateGrants) {
         throw new RequiredSchemaError(
           `[db] Postgres at ${target} still has missing or widened session ` +
-            `UPDATE grants. Apply db/11-session-update-grants.sql as the ` +
-            `database owner, then run db/03-grants-assertion.sql before ` +
-            `starting this server version.`,
+            `UPDATE grants. Reconcile the historical shape with ` +
+            `db/11-session-update-grants.sql as the database owner, then run ` +
+            `db/03-grants-assertion.sql to identify any unexpected live ` +
+            `column grant before starting this server version.`,
         );
       }
       // Only reference the ledger after to_regclass proved it exists. Putting

@@ -200,7 +200,13 @@ idempotent lexical-search migration as the database owner. If the extension is
 older, update the pinned pgvector image/package and run
 `ALTER EXTENSION vector UPDATE;` before the migration:
 
+Run this as one block. The subshell's `set -e` makes every next step conditional
+on the previous one: a build failure leaves the current MCP serving, while any
+post-stop failure exits before `up` and leaves MCP quiesced for diagnosis.
+
 ```bash
+(
+set -e
 # Build the replacement while the current MCP is still serving. Migration 11
 # is intentionally incompatible with pre-1.24 recapture SQL, so quiesce MCP
 # before replaying the database files and leave it stopped on any SQL failure.
@@ -240,6 +246,7 @@ docker compose exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/03-grants-assertion.sql
 docker compose up -d --no-deps mcp
+)
 ```
 
 Migration 09 is the Arc B corpus boundary. On an older data directory it refuses

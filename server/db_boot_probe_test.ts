@@ -129,6 +129,9 @@ Deno.test("probeDbAtBoot: success path validates connectivity and hybrid schema"
   assert(queries[1].includes("thought_revisions_app_head"));
   assert(queries[1].includes("sessions.session"));
   assert(queries[1].includes("sessions.artifact"));
+  assert(queries[1].includes("session_update_columns"));
+  assert(queries[1].includes("FROM pg_attribute AS live_column"));
+  assert(queries[1].includes("allowed.attname = live_column.attname::text"));
   assert(queries[1].includes("has_any_column_privilege"));
   assert(
     queries[1].includes(
