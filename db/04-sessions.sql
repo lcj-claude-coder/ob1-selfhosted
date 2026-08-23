@@ -16,9 +16,14 @@
 -- pinned independently of OB — if EMBED_MODEL/EMBED_DIM change ),
 -- change vector(768) here AND in db/01-schema.sql together and re-embed.
 --
--- IDEMPOTENT and re-runnable: init scripts only auto-run on a fresh data dir,
--- so apply to an existing deployment manually (safe to re-run). Run it from
--- your compose project directory, invoked the way you start the stack there
+-- IDEMPOTENT and re-runnable at the catalog level: init scripts only auto-run
+-- on a fresh data dir, so apply to an existing deployment manually when
+-- required. Do not replay it while a pre-1.24 MCP is serving: this file narrows
+-- session UPDATE grants that the older recapture SQL still uses. For an
+-- upgrade, build the replacement first and quiesce MCP before this replay;
+-- follow "Upgrading an existing database/deployment" in the appropriate
+-- deploy/compose-local or deploy/compose-tailnet README. Then run it from your
+-- compose project directory, invoked the way you start the stack there
 -- (deploy/compose-tailnet/README.md §"Start the stack" gives both forms) — the
 -- exec has to resolve the same project as the running stack or it finds no
 -- container:
