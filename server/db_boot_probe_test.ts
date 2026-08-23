@@ -126,8 +126,15 @@ Deno.test("probeDbAtBoot: success path validates connectivity and hybrid schema"
   assert(queries[1].includes("created_at"));
   assert(queries[1].includes("native_auth.access_token"));
   assert(queries[1].includes("mcp_auth_events"));
+  assert(queries[1].includes("mcp_auth_events_id_seq"));
   assert(queries[1].includes("mcp_auth_events_outcome_shape_check"));
   assert(queries[1].includes("openbrain_auth_rollup"));
+  assert(queries[1].includes("UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER"));
+  assert(queries[1].includes("FROM pg_auth_members AS membership"));
+  assert(queries[1].includes("FROM pg_class AS relation"));
+  assert(queries[1].includes("FROM pg_proc AS routine"));
+  assert(queries[1].includes("has_sequence_privilege"));
+  assert(queries[1].includes("has_function_privilege"));
   assert(queries[1].includes("public.thought_revisions"));
   assert(queries[1].includes("thought_revisions_app_head"));
   assert(queries[1].includes("sessions.session"));

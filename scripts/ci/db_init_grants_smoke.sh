@@ -115,6 +115,28 @@ expect_rejected "auth rollup INSERT" \
 apply_sql db/12-auth-audit-grants.sql >/dev/null
 run_assertion >/dev/null
 
+# PostgreSQL's table-level REVOKE ALL also removes direct column ACLs for the
+# named role. Pin that behavior against the exact INSERT/REFERENCES drift raised
+# in review for both supported convergence paths.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT INSERT (subject), REFERENCES (subject)
+   ON public.mcp_auth_events TO openbrain_auth_rollup"
+expect_rejected "auth rollup column INSERT/REFERENCES" \
+  "openbrain_auth_rollup must have SELECT/DELETE only"
+apply_sql db/12-auth-audit-grants.sql >/dev/null
+run_assertion >/dev/null
+
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT INSERT (subject), REFERENCES (subject)
+   ON public.mcp_auth_events TO openbrain_auth_rollup"
+expect_rejected "auth rollup column drift before observability replay" \
+  "openbrain_auth_rollup must have SELECT/DELETE only"
+apply_sql db/02-observability.sql >/dev/null
+run_assertion >/dev/null
+
+smoke_step "Smoke test — boot probe rejects auth-audit grant drift"
+run_deno_db_smoke server/auth_audit_grants_db_smoke.ts
+
 super_psql -v ON_ERROR_STOP=1 -c \
   "GRANT SELECT ON public.thoughts TO openbrain_auth_rollup"
 expect_rejected "auth rollup sideways corpus access" \

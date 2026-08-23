@@ -6,6 +6,13 @@
 # the external/native Postgres used by the split-Qubes deployment.
 set -euo pipefail
 
+# Preserve inherited values for configuration precedence, but strip their
+# export attributes before dirname or any other child process can inherit them.
+# Repeat after sourcing in case a hand-written env file uses export.
+export -n POSTGRES_PASSWORD OPENBRAIN_APP_PASSWORD \
+  OPENBRAIN_READONLY_PASSWORD OPENBRAIN_TOKEN_ADMIN_PASSWORD \
+  OPENBRAIN_AUTH_ROLLUP_PASSWORD 2>/dev/null || true
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="${1:-$SCRIPT_DIR/../deploy/compose-local}"
 DEPLOY_DIR="$(cd "$DEPLOY_DIR" && pwd)"
@@ -27,9 +34,9 @@ POSTGRES_USER="${POSTGRES_USER:-postgres}"
 POSTGRES_DB="${POSTGRES_DB:-openbrain}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
 
-# Strip every deployment secret before the first child. Each database client
-# below receives only its authentication password plus the new role password;
-# the latter is retrieved with \getenv and never appears in an argv.
+# Strip any values that the sourced file explicitly exported. Each database
+# client below receives only its authentication password plus the new role
+# password; the latter is retrieved with \getenv and never appears in an argv.
 export -n POSTGRES_PASSWORD OPENBRAIN_APP_PASSWORD \
   OPENBRAIN_READONLY_PASSWORD OPENBRAIN_TOKEN_ADMIN_PASSWORD \
   OPENBRAIN_AUTH_ROLLUP_PASSWORD 2>/dev/null || true

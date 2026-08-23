@@ -42,6 +42,7 @@ on:
       - "server/auth_context.ts"
       - "server/access_tokens_db_smoke.ts"
       - "server/auth_audit_db_smoke.ts"
+      - "server/auth_audit_grants_db_smoke.ts"
       - "server/auth_audit_upgrade_db_smoke.ts"
       - "server/auth_middleware_audit_db_smoke.ts"
       - "server/auth.ts"

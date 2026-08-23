@@ -11,6 +11,8 @@ trap 'rm -rf -- "$test_root"' EXIT
 
 deploy_dir="$test_root/deploy"
 fake_bin="$test_root/bin"
+dirname_marker="$test_root/dirname-called"
+real_dirname="$(command -v dirname)"
 install -d -m 0700 "$deploy_dir" "$fake_bin"
 
 {
@@ -25,6 +27,20 @@ install -d -m 0700 "$deploy_dir" "$fake_bin"
   printf 'export OPENBRAIN_TOKEN_ADMIN_PASSWORD=must-not-reach-psql\n'
 } > "$deploy_dir/.env"
 chmod 0600 "$deploy_dir/.env"
+
+cat > "$fake_bin/dirname" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+for forbidden in POSTGRES_PASSWORD OPENBRAIN_APP_PASSWORD \
+  OPENBRAIN_READONLY_PASSWORD OPENBRAIN_TOKEN_ADMIN_PASSWORD \
+  OPENBRAIN_AUTH_ROLLUP_PASSWORD; do
+  [[ ! -v "$forbidden" ]]
+done
+printf 'called\n' > "${AUTH_ROLLUP_TEST_DIRNAME_MARKER:?}"
+exec "${AUTH_ROLLUP_TEST_REAL_DIRNAME:?}" "$@"
+SH
+chmod 0755 "$fake_bin/dirname"
 
 cat > "$fake_bin/psql" <<'SH'
 #!/usr/bin/env bash
@@ -58,8 +74,15 @@ done
 SH
 chmod 0755 "$fake_bin/psql"
 
-PATH="$fake_bin:$PATH" \
+POSTGRES_PASSWORD=inherited-admin-secret \
+OPENBRAIN_APP_PASSWORD=inherited-app-secret \
+OPENBRAIN_READONLY_PASSWORD=inherited-readonly-secret \
+OPENBRAIN_TOKEN_ADMIN_PASSWORD=inherited-token-admin-secret \
+OPENBRAIN_AUTH_ROLLUP_PASSWORD=inherited-rollup-secret \
+AUTH_ROLLUP_TEST_DIRNAME_MARKER="$dirname_marker" \
+AUTH_ROLLUP_TEST_REAL_DIRNAME="$real_dirname" PATH="$fake_bin:$PATH" \
   bash "$REPO_ROOT/scripts/upgrade-enable-auth-rollup-role.sh" "$deploy_dir" \
   | grep -Fq "role provisioned"
+grep -Fxq called "$dirname_marker"
 
-echo "auth-rollup upgrade helper confined secrets and targeted external Postgres"
+echo "auth-rollup upgrade helper confined inherited/sourced secrets and targeted external Postgres"

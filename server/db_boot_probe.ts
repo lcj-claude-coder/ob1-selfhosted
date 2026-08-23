@@ -288,8 +288,12 @@ export async function probeDbAtBoot(
                WHERE conrelid = to_regclass('public.mcp_auth_events')
                AND conname = 'mcp_auth_events_outcome_shape_check'
              ),
+           -- Mirror db/03's security-relevant auth-audit boundary at boot:
+           -- exact app table/sequence rights and a standalone rollup with no
+           -- sideways relation, sequence, membership, or definer-function path.
            COALESCE(
              to_regclass('public.mcp_auth_events') IS NOT NULL
+             AND to_regclass('public.mcp_auth_events_id_seq') IS NOT NULL
              AND has_table_privilege(
                current_user, to_regclass('public.mcp_auth_events'), 'SELECT'
              )
@@ -299,12 +303,22 @@ export async function probeDbAtBoot(
              AND NOT has_table_privilege(
                current_user,
                to_regclass('public.mcp_auth_events'),
-               'UPDATE, DELETE'
+               'UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
              )
              AND NOT has_any_column_privilege(
                current_user,
                to_regclass('public.mcp_auth_events'),
-               'UPDATE'
+               'UPDATE, REFERENCES'
+             )
+             AND has_sequence_privilege(
+               current_user,
+               to_regclass('public.mcp_auth_events_id_seq'),
+               'USAGE'
+             )
+             AND NOT has_sequence_privilege(
+               current_user,
+               to_regclass('public.mcp_auth_events_id_seq'),
+               'SELECT, UPDATE'
              )
              AND EXISTS (
                SELECT 1
@@ -316,6 +330,12 @@ export async function probeDbAtBoot(
                  AND NOT rollup.rolcreaterole
                  AND NOT rollup.rolreplication
                  AND NOT rollup.rolbypassrls
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_auth_members AS membership
+                   WHERE membership.member = rollup.oid
+                      OR membership.roleid = rollup.oid
+                 )
                  AND has_table_privilege(
                    rollup.oid,
                    to_regclass('public.mcp_auth_events'),
@@ -329,12 +349,60 @@ export async function probeDbAtBoot(
                  AND NOT has_table_privilege(
                    rollup.oid,
                    to_regclass('public.mcp_auth_events'),
-                   'INSERT, UPDATE'
+                   'INSERT, UPDATE, TRUNCATE, REFERENCES, TRIGGER'
                  )
                  AND NOT has_any_column_privilege(
                    rollup.oid,
                    to_regclass('public.mcp_auth_events'),
-                   'INSERT, UPDATE'
+                   'INSERT, UPDATE, REFERENCES'
+                 )
+                 AND NOT has_sequence_privilege(
+                   rollup.oid,
+                   to_regclass('public.mcp_auth_events_id_seq'),
+                   'USAGE, SELECT, UPDATE'
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_class AS relation
+                   JOIN pg_namespace AS namespace
+                     ON namespace.oid = relation.relnamespace
+                   WHERE namespace.nspname <> 'information_schema'
+                     AND namespace.nspname !~ '^pg_'
+                     AND relation.oid <>
+                         to_regclass('public.mcp_auth_events')
+                     AND (
+                       relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+                       AND (
+                         has_table_privilege(
+                           rollup.oid,
+                           relation.oid,
+                           'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'
+                         )
+                         OR has_any_column_privilege(
+                           rollup.oid,
+                           relation.oid,
+                           'SELECT, INSERT, UPDATE, REFERENCES'
+                         )
+                       )
+                       OR relation.relkind = 'S'
+                         AND has_sequence_privilege(
+                           rollup.oid,
+                           relation.oid,
+                           'USAGE, SELECT, UPDATE'
+                         )
+                     )
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1
+                   FROM pg_proc AS routine
+                   JOIN pg_namespace AS namespace
+                     ON namespace.oid = routine.pronamespace
+                   WHERE namespace.nspname <> 'information_schema'
+                     AND namespace.nspname !~ '^pg_'
+                     AND routine.prosecdef
+                     AND has_function_privilege(
+                       rollup.oid, routine.oid, 'EXECUTE'
+                     )
                  )
              ),
              false
