@@ -8,18 +8,36 @@ covers connecting **claude.ai / Claude mobile** (a confidential client), and
 [codex-oauth-client.md](codex-oauth-client.md) covers a local **Codex CLI** (a
 public PKCE client with a pre-registered client ID). This doc covers a third
 client shape: a local [Kimi Code](https://www.kimi.com/code) CLI, which is
-**also a public PKCE client — but one that registers exclusively through Dynamic
-Client Registration (DCR)**.
+**also a public PKCE client — but one whose interactive login registers
+exclusively through Dynamic Client Registration (DCR)**.
+
+> **Unattended or multi-host? Prefer a service account instead.** If the
+> caller is an automation rather than an interactive user — or you run Kimi
+> Code on several machines and don't want one DCR-created application per
+> login per host — use the [client-credentials service-account
+> route](service-account-oauth-client.md) with Kimi Code's
+> `bearerTokenEnvVar` plus a launch-time token-minting wrapper (sketch below).
+> It needs no DCR window, no browser, and a single pre-registered M2M
+> application. This doc's DCR flow remains the route for user-identity
+> interactive logins.
 
 Kimi Code's MCP server configuration (`mcp.json`) has no field for a
-pre-registered OAuth client ID (as of CLI 0.27.0 — the HTTP-server fields are
-`url`, `auth`, `bearerTokenEnvVar`, headers, and tool/timeout options only), and
-its OAuth flow requires the authorization server to advertise a
-`registration_endpoint`. The pre-registered Native-client route that is
-_preferred_ for Codex is therefore **not available** here: the time-boxed DCR
-procedure is the only route, and every new Kimi Code host needs it. If a future
-Kimi Code release adds a static client-ID option, prefer the pre-registered
-route from the Codex doc instead.
+pre-registered OAuth client ID (still true as of CLI 0.38.0 — the HTTP-server
+fields are `url`, `auth`, `bearerTokenEnvVar`, headers, and tool/timeout
+options only), and its OAuth flow requires the authorization server to
+advertise a `registration_endpoint`. The pre-registered Native-client route
+that is _preferred_ for Codex is therefore **not available** for interactive
+login here: the time-boxed DCR procedure is the only interactive route. If a
+future Kimi Code release adds a static client-ID option, prefer the
+pre-registered route from the Codex doc instead.
+
+Note the registration's lifetime: since CLI 0.33.0, each login flow binds its
+callback listener to a random loopback port and **drops any cached client
+registration whose `redirect_uris` don't contain that exact URI** before
+starting — so every login re-registers. A DCR-created application therefore
+can't be shared across hosts or reused for a later re-login on the same host;
+only the stored refresh token carries a host's session forward. This is the
+second reason multi-host setups should prefer the service-account route.
 
 The procedure below was verified end-to-end on **2026-07-19** with **Kimi Code
 CLI 0.27.0** on a tailnet-connected Linux host: OAuth login, the 11-tool MCP
@@ -41,6 +59,42 @@ credential store.
 > secrets, or the contents of the credential store into git, issue comments,
 > shell transcripts, or test artifacts.**
 
+## Service-account wiring sketch (preferred for automation)
+
+With an M2M application created and its subject enrolled per
+[service-account-oauth-client.md](service-account-oauth-client.md), Kimi Code
+needs no OAuth flow at all. Point the server entry at an environment variable
+that holds a fresh access token:
+
+```json
+{
+  "mcpServers": {
+    "openbrain": {
+      "url": "https://homebox.tailnet-name.ts.net/mcp",
+      "bearerTokenEnvVar": "OPENBRAIN_MCP_TOKEN"
+    }
+  }
+}
+```
+
+and wrap the CLI launch so the variable is always freshly minted (any
+language; stdlib-only is fine — request `grant_type=client_credentials` with
+`client_secret_post` against the tenant token endpoint, cache the JWT until
+near expiry, print it on stdout):
+
+```sh
+export OPENBRAIN_MCP_TOKEN="$(ob1-mcp-token)"   # mint-or-cache helper
+exec kimi "$@"
+```
+
+Keep the client ID + secret in a `0600` file the helper reads — never in
+`mcp.json`, shell history, or command arguments. When `bearerTokenEnvVar` is
+set, Kimi Code bypasses its OAuth/DCR machinery entirely, so no DCR window is
+ever needed; onboarding another host means copying the helper and its
+credentials file. The env var is read at process start, so a session that
+outlives the token's lifetime needs a restart (resume is sufficient) to pick
+up a fresh one.
+
 ## Boundaries
 
 - Same as the Codex doc: this covers a **locally running Kimi Code process**
@@ -52,8 +106,10 @@ credential store.
   deployment ignores `X-Brain-Key` entirely.
 - This does **not** authorize cloud-hosted agent workers. Keep public cloud
   ingress disabled.
-- Kimi Code supports `bearerTokenEnvVar` for HTTP MCP servers — it is **not** an
-  alternative here, because this deployment enables no `x-brain-key` door.
+- Kimi Code supports `bearerTokenEnvVar` for HTTP MCP servers — a **static**
+  token is not an alternative here, because this deployment enables no
+  `x-brain-key` door. (A *short-lived OAuth bearer* injected through
+  `bearerTokenEnvVar` is exactly what the service-account sketch above does.)
 
 ## Prerequisites
 
