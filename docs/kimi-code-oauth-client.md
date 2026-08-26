@@ -91,12 +91,24 @@ holds a fresh access token:
 and wrap the CLI launch so the variable is always freshly minted (any language;
 stdlib-only is fine — request `grant_type=client_credentials` with
 `client_secret_post` against the tenant token endpoint, cache the JWT until near
-expiry, print it on stdout):
+expiry in an owner-only `0600` file written atomically, print it on stdout):
 
 ```sh
-export OPENBRAIN_MCP_TOKEN="$(ob1-mcp-token)"   # mint-or-cache helper
+OPENBRAIN_MCP_TOKEN="$(ob1-mcp-token)" || exit 1   # mint-or-cache helper
+export OPENBRAIN_MCP_TOKEN
 exec kimi "$@"
 ```
+
+Check the substitution's status on its own line, as above: a bare
+`export OPENBRAIN_MCP_TOKEN="$(ob1-mcp-token)"` masks the helper's failure
+(`export` exits 0 even when the substitution failed), so a failed mint would
+launch Kimi with an empty token and surface later as a confusing 401. If you
+would rather never block the CLI on token plumbing, warn and
+`unset
+OPENBRAIN_MCP_TOKEN` before `exec` instead of exiting — but do one or the
+other explicitly. The token cache holds a live bearer credential for its
+remaining lifetime, so it deserves the same owner-only treatment as the
+credentials file.
 
 Keep the client ID + secret in a `0600` file the helper reads — never in
 `mcp.json`, shell history, or command arguments. When `bearerTokenEnvVar` is
