@@ -24,9 +24,10 @@ exclusively through Dynamic Client Registration (DCR)**.
 > user-identity interactive logins.
 
 Kimi Code's MCP server configuration (`mcp.json`) has no field for a
-pre-registered OAuth client ID (still true as of CLI 0.38.0 — the HTTP-server
-fields are `url`, `auth`, `bearerTokenEnvVar`, headers, and tool/timeout options
-only), and its OAuth flow requires the authorization server to advertise a
+pre-registered OAuth client ID (still true as of CLI 0.38.0 — its HTTP-server
+schema offers `url`, `auth`, `bearerTokenEnvVar`, headers, and
+tool/timeout/enablement options, none of which carries a client ID), and its
+OAuth flow requires the authorization server to advertise a
 `registration_endpoint`. The pre-registered Native-client route that is
 _preferred_ for Codex is therefore **not available** for interactive login here:
 the time-boxed DCR procedure is the only interactive route. If a future Kimi
