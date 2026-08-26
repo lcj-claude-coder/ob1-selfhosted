@@ -8,28 +8,56 @@ covers connecting **claude.ai / Claude mobile** (a confidential client), and
 [codex-oauth-client.md](codex-oauth-client.md) covers a local **Codex CLI** (a
 public PKCE client with a pre-registered client ID). This doc covers a third
 client shape: a local [Kimi Code](https://www.kimi.com/code) CLI, which is
-**also a public PKCE client — but one that registers exclusively through Dynamic
-Client Registration (DCR)**.
+**also a public PKCE client — but one whose interactive login registers
+exclusively through Dynamic Client Registration (DCR)**.
+
+> **Unattended or multi-host? Prefer a service account instead.** If the caller
+> is an automation rather than an interactive user — or you run Kimi Code on
+> several machines and don't want one DCR-created application per login per host
+> — use the
+> [client-credentials service-account route](service-account-oauth-client.md)
+> with Kimi Code's `bearerTokenEnvVar` plus a launch-time token-minting wrapper
+> (sketch below). It needs no DCR window, no browser, and one pre-registered M2M
+> application **per agent or automation boundary** — registered once, not once
+> per login per host. Note that a service account authenticates as its own
+> machine principal, not as the user: this doc's DCR flow remains the route for
+> user-identity interactive logins.
 
 Kimi Code's MCP server configuration (`mcp.json`) has no field for a
-pre-registered OAuth client ID (as of CLI 0.27.0 — the HTTP-server fields are
-`url`, `auth`, `bearerTokenEnvVar`, headers, and tool/timeout options only), and
-its OAuth flow requires the authorization server to advertise a
+pre-registered OAuth client ID (still true as of CLI 0.38.0 — its HTTP-server
+schema offers `url`, `auth`, `bearerTokenEnvVar`, headers, and
+tool/timeout/enablement options, none of which carries a client ID), and its
+OAuth flow requires the authorization server to advertise a
 `registration_endpoint`. The pre-registered Native-client route that is
-_preferred_ for Codex is therefore **not available** here: the time-boxed DCR
-procedure is the only route, and every new Kimi Code host needs it. If a future
-Kimi Code release adds a static client-ID option, prefer the pre-registered
-route from the Codex doc instead.
+_preferred_ for Codex is therefore **not available** for interactive login here:
+the time-boxed DCR procedure is the only interactive route. If a future Kimi
+Code release adds a static client-ID option, prefer the pre-registered route
+from the Codex doc instead.
 
-The procedure below was verified end-to-end on **2026-07-19** with **Kimi Code
-CLI 0.27.0** on a tailnet-connected Linux host: OAuth login, the 11-tool MCP
+Note the registration's lifetime: since CLI 0.33.0, each login flow binds its
+callback listener to a random loopback port and **drops any cached client
+registration whose `redirect_uris` don't contain that exact URI** before
+starting — so every login re-registers. A DCR-created application therefore
+can't be shared across hosts or reused for a later re-login on the same host;
+only the stored refresh token carries a host's session forward. This is the
+second reason multi-host setups should prefer the service-account route.
+
+The two routes below carry separate verification notes. The **DCR login
+procedure** was verified end-to-end on **2026-07-19** with **Kimi Code CLI
+0.27.0** on a tailnet-connected Linux host: OAuth login, the 11-tool MCP
 listing, read-only `session_*` calls, and a refresh token persisted in the
-credential store.
+credential store. The **service-account wiring** (`bearerTokenEnvVar` plus a
+mint-and-cache wrapper) was verified end-to-end on **2026-08-24** with **CLI
+0.38.0**: token mint, MCP `initialize`, and tool listing with no DCR window and
+no browser. The per-login re-registration behavior described above was confirmed
+against the 0.38.0 binary (`invalidateStaleRegistration`).
 
 > **Scope: Auth0, as we run it today.** Same caveat as the Codex doc — this
-> documents the one provider and flow this project operates (Auth0, public PKCE
-> clients). Kimi Code speaks standard OAuth 2.1 + PKCE + RFC 7591 DCR, so other
-> OIDC providers almost certainly work — we just don't run them.
+> documents the one provider this project operates (Auth0) and the two flows we
+> use with it: public PKCE clients for interactive login, and
+> `client_credentials` service accounts for automation. Kimi Code speaks
+> standard OAuth 2.1 + PKCE + RFC 7591 DCR, so other OIDC providers almost
+> certainly work — we just don't run them.
 
 > **Tenant membership control comes first.** Same as the Codex doc: decide who
 > may enroll in the tenant _before_ wiring up any client — the traps (an open
@@ -40,6 +68,74 @@ credential store.
 > **Never put access tokens, refresh tokens, authorization codes, client
 > secrets, or the contents of the credential store into git, issue comments,
 > shell transcripts, or test artifacts.**
+
+## Service-account wiring sketch (preferred for automation)
+
+With an M2M application created and its subject enrolled per
+[service-account-oauth-client.md](service-account-oauth-client.md), Kimi Code
+itself runs no OAuth flow: the wrapper below performs the OAuth 2.0
+`client_credentials` exchange out of band, and the CLI simply consumes the
+resulting bearer token. Point the server entry at an environment variable that
+holds a fresh access token:
+
+```json
+{
+  "mcpServers": {
+    "openbrain": {
+      "url": "https://homebox.tailnet-name.ts.net/mcp",
+      "bearerTokenEnvVar": "OPENBRAIN_MCP_TOKEN"
+    }
+  }
+}
+```
+
+and wrap the CLI launch so the variable is always freshly minted (any language;
+stdlib-only is fine — request `grant_type=client_credentials` with
+`client_secret_post` against the tenant token endpoint, sending the exact API
+`audience` the deployment expects (an audience-less Auth0 custom-API exchange
+yields a token this deployment rejects), refuse token-endpoint redirects so a
+307/308 cannot replay the credentials to a second URL, cache the JWT until near
+expiry in an owner-only `0600` file written atomically, print it on stdout):
+
+```sh
+OPENBRAIN_MCP_TOKEN="$(ob1-mcp-token)" || exit 1   # mint-or-cache helper
+export OPENBRAIN_MCP_TOKEN
+exec kimi "$@"
+```
+
+Check the substitution's status on its own line, as above: a bare
+`export OPENBRAIN_MCP_TOKEN="$(ob1-mcp-token)"` masks the helper's failure
+(`export` exits 0 even when the substitution failed). A failed mint would launch
+Kimi with an empty token, which the CLI rejects before connecting: the server
+ends in a failed state with a missing/empty bearer-token configuration error,
+not a 401 from the deployment. If you would rather never block the CLI on token
+plumbing, warn and `unset OPENBRAIN_MCP_TOKEN` before `exec` instead of exiting
+— Kimi itself then starts with this MCP server unavailable (an unset variable
+does not fall back to DCR while `bearerTokenEnvVar` is configured) — but do one
+or the other explicitly. The token cache holds a live bearer credential for its
+remaining lifetime, so it deserves the same owner-only treatment as the
+credentials file.
+
+Keep the client ID + secret in a `0600` file the helper reads — never in
+`mcp.json`, shell history, or command arguments. When `bearerTokenEnvVar` is
+set, Kimi Code bypasses its OAuth/DCR machinery entirely, so no DCR window is
+ever needed. Onboarding another host means creating that host's own M2M
+application, enrolling its subject, and installing the helper with a fresh
+credentials file — a few minutes of provider console work, still no DCR window.
+Use **one application per agent or automation boundary**, not one shared across
+hosts: the verified `sub` is the caller's personal-memory principal, and
+separate clients keep revocation, rotation, and attribution narrow (identity
+guidance in the service-account doc). A single application shared across hosts
+is a documented exception only — every host then holds the same secret and all
+calls arrive as one principal. The env var is read at process start, so a
+session that outlives the token's lifetime needs a restart (resume is
+sufficient) to pick up a fresh one.
+
+Note that this repository's tracked helper,
+[`scripts/verify-service-account.ts`](../scripts/verify-service-account.ts), is
+a _smoke test_ for the same grant — it deliberately never prints the token, so
+it proves the wiring end to end but cannot feed `bearerTokenEnvVar`. The
+launch-time mint-and-cache helper is a separate small script, not that one.
 
 ## Boundaries
 
@@ -52,10 +148,16 @@ credential store.
   deployment ignores `X-Brain-Key` entirely.
 - This does **not** authorize cloud-hosted agent workers. Keep public cloud
   ingress disabled.
-- Kimi Code supports `bearerTokenEnvVar` for HTTP MCP servers — it is **not** an
-  alternative here, because this deployment enables no `x-brain-key` door.
+- Kimi Code supports `bearerTokenEnvVar` for HTTP MCP servers — a **static**
+  token is not an alternative here, because this deployment enables no
+  `x-brain-key` door. (A _short-lived OAuth bearer_ injected through
+  `bearerTokenEnvVar` is exactly what the service-account sketch above does.)
 
-## Prerequisites
+## Prerequisites (interactive DCR route)
+
+These checks precede the DCR login below. The service-account route skips this
+section entirely — its prerequisites are the provider-side procedure in
+[service-account-oauth-client.md](service-account-oauth-client.md).
 
 1. Confirm the protected resource is healthy and advertises the expected issuer
    (same checks as the Codex doc):
@@ -83,9 +185,9 @@ credential store.
 
 ## Enable the DCR window (operator step)
 
-Kimi Code cannot use a pre-registered client, so open a **time-boxed** DCR
-window before login — the same procedure the Codex doc documents as its
-fallback:
+Kimi Code cannot use a pre-registered client for interactive login, so open a
+**time-boxed** DCR window before login — the same procedure the Codex doc
+documents as its fallback:
 
 1. In the OpenBrain **Auth0 API → Settings**, set the **default third-party
    permissions** to the minimum OpenBrain needs (DCR-registered clients are
@@ -98,12 +200,17 @@ Plan to disable DCR **immediately after** the login completes. Open DCR lets
 anyone register a third-party application against your tenant during that
 window, while the Domain-Level login connection remains available to third-party
 applications after DCR is disabled. Treat both as deliberate exposure. The
-registered client and its refresh token keep working after DCR is off — **do not
-delete** the newly DCR-created application (normally
-`kimi-code (<server-name>)`, which is `kimi-code (openbrain)` for the entry
-below); deleting it forces re-registration through another DCR window. Because
-Kimi Code has no pre-registered route, each _additional_ Kimi Code host needs
-this window opened again.
+registered client and its refresh token keep working after DCR is off. Since
+every login re-registers (the registration-lifetime note above), the tenant
+accumulates identically named `kimi-code (openbrain)` applications over time:
+**do not delete** the one backing a live host's credential store — its
+`client_id` is in that host's
+`~/.kimi-code/credentials/mcp/openbrain-*-client.json`, and deleting it
+invalidates the stored refresh token, killing the live session. Registrations
+referenced by no live credential store are superseded and safe to remove. And
+because registration is per login, not per host, this window is needed again for
+each _additional_ Kimi Code host **and for any re-login on the same host**
+(logout, credential loss, refresh-token expiry or revocation).
 
 ## Configure and log in
 
@@ -195,10 +302,12 @@ Same as the Codex doc: read-only `session_search`/`session_lookup` first, then
 the full `+++`-delimited TOML staging payload to `session_capture`, **recording
 the returned integer `id`** back into the payload (omission on re-capture mints
 a duplicate), and verifying the round-trip reports an _update_. Server-side
-provenance should show `source = 'funnel'` with a non-null `source_node` (the
-JWT subject) — an authentication-door label, not a network-path claim; the
-tailnet client is expected to arrive via Caddy's `@tailnet` branch. The SQL
-check and the Caddy-log path discrimination are in
+provenance should show `source = 'funnel'` for an interactive DCR login, or
+`source = 'service'` for a client-credentials service account — in both cases
+with a non-null `source_node` (the verified JWT subject). That label is an
+authentication-door marker, not a network-path claim; the tailnet client is
+expected to arrive via Caddy's `@tailnet` branch. The SQL check and the
+Caddy-log path discrimination are in
 [codex-oauth-client.md](codex-oauth-client.md#smoke-test-and-staged-session-import).
 
 ## Restart and refresh verification
