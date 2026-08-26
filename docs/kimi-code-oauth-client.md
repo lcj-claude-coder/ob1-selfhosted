@@ -91,7 +91,10 @@ holds a fresh access token:
 
 and wrap the CLI launch so the variable is always freshly minted (any language;
 stdlib-only is fine — request `grant_type=client_credentials` with
-`client_secret_post` against the tenant token endpoint, cache the JWT until near
+`client_secret_post` against the tenant token endpoint, sending the exact API
+`audience` the deployment expects (an audience-less Auth0 custom-API exchange
+yields a token this deployment rejects), refuse token-endpoint redirects so a
+307/308 cannot replay the credentials to a second URL, cache the JWT until near
 expiry in an owner-only `0600` file written atomically, print it on stdout):
 
 ```sh
