@@ -17,8 +17,10 @@ exclusively through Dynamic Client Registration (DCR)**.
 > — use the
 > [client-credentials service-account route](service-account-oauth-client.md)
 > with Kimi Code's `bearerTokenEnvVar` plus a launch-time token-minting wrapper
-> (sketch below). It needs no DCR window, no browser, and a single
-> pre-registered M2M application. This doc's DCR flow remains the route for
+> (sketch below). It needs no DCR window, no browser, and one pre-registered M2M
+> application **per agent or automation boundary** — registered once, not once
+> per login per host. Note that a service account authenticates as its own
+> machine principal, not as the user: this doc's DCR flow remains the route for
 > user-identity interactive logins.
 
 Kimi Code's MCP server configuration (`mcp.json`) has no field for a
@@ -97,10 +99,17 @@ exec kimi "$@"
 Keep the client ID + secret in a `0600` file the helper reads — never in
 `mcp.json`, shell history, or command arguments. When `bearerTokenEnvVar` is
 set, Kimi Code bypasses its OAuth/DCR machinery entirely, so no DCR window is
-ever needed; onboarding another host means copying the helper and its
-credentials file. The env var is read at process start, so a session that
-outlives the token's lifetime needs a restart (resume is sufficient) to pick up
-a fresh one.
+ever needed. Onboarding another host means creating that host's own M2M
+application, enrolling its subject, and installing the helper with a fresh
+credentials file — a few minutes of provider console work, still no DCR window.
+Use **one application per agent or automation boundary**, not one shared across
+hosts: the verified `sub` is the caller's personal-memory principal, and
+separate clients keep revocation, rotation, and attribution narrow (identity
+guidance in the service-account doc). A single application shared across hosts
+is a documented exception only — every host then holds the same secret and all
+calls arrive as one principal. The env var is read at process start, so a
+session that outlives the token's lifetime needs a restart (resume is
+sufficient) to pick up a fresh one.
 
 Note that this repository's tracked helper,
 [`scripts/verify-service-account.ts`](../scripts/verify-service-account.ts), is
