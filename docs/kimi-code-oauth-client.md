@@ -202,11 +202,11 @@ accumulates identically named `kimi-code (openbrain)` applications over time:
 **do not delete** the one backing a live host's credential store — its
 `client_id` is in that host's
 `~/.kimi-code/credentials/mcp/openbrain-*-client.json`, and deleting it
-invalidates the stored refresh token, killing the live session. Registrations no
-live credential store references are superseded and safe to remove. And because
-registration is per login, not per host, this window is needed again for each
-_additional_ Kimi Code host **and for any re-login on the same host** (logout,
-credential loss, refresh-token expiry or revocation).
+invalidates the stored refresh token, killing the live session. Registrations
+referenced by no live credential store are superseded and safe to remove. And
+because registration is per login, not per host, this window is needed again for
+each _additional_ Kimi Code host **and for any re-login on the same host**
+(logout, credential loss, refresh-token expiry or revocation).
 
 ## Configure and log in
 
