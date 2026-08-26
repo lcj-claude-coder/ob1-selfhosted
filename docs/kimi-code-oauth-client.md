@@ -39,10 +39,15 @@ can't be shared across hosts or reused for a later re-login on the same host;
 only the stored refresh token carries a host's session forward. This is the
 second reason multi-host setups should prefer the service-account route.
 
-The procedure below was verified end-to-end on **2026-07-19** with **Kimi Code
-CLI 0.27.0** on a tailnet-connected Linux host: OAuth login, the 11-tool MCP
+The two routes below carry separate verification notes. The **DCR login
+procedure** was verified end-to-end on **2026-07-19** with **Kimi Code CLI
+0.27.0** on a tailnet-connected Linux host: OAuth login, the 11-tool MCP
 listing, read-only `session_*` calls, and a refresh token persisted in the
-credential store.
+credential store. The **service-account wiring** (`bearerTokenEnvVar` plus a
+mint-and-cache wrapper) was verified end-to-end on **2026-08-24** with **CLI
+0.38.0**: token mint, MCP `initialize`, and tool listing with no DCR window
+and no browser. The per-login re-registration behavior described above was
+confirmed against the 0.38.0 binary (`invalidateStaleRegistration`).
 
 > **Scope: Auth0, as we run it today.** Same caveat as the Codex doc — this
 > documents the one provider and flow this project operates (Auth0, public PKCE
@@ -63,7 +68,9 @@ credential store.
 
 With an M2M application created and its subject enrolled per
 [service-account-oauth-client.md](service-account-oauth-client.md), Kimi Code
-needs no OAuth flow at all. Point the server entry at an environment variable
+itself runs no OAuth flow: the wrapper below performs the OAuth 2.0
+`client_credentials` exchange out of band, and the CLI simply consumes the
+resulting bearer token. Point the server entry at an environment variable
 that holds a fresh access token:
 
 ```json
@@ -94,6 +101,12 @@ ever needed; onboarding another host means copying the helper and its
 credentials file. The env var is read at process start, so a session that
 outlives the token's lifetime needs a restart (resume is sufficient) to pick
 up a fresh one.
+
+Note that this repository's tracked helper,
+[`scripts/verify-service-account.ts`](../scripts/verify-service-account.ts), is
+a *smoke test* for the same grant — it deliberately never prints the token, so
+it proves the wiring end to end but cannot feed `bearerTokenEnvVar`. The
+launch-time mint-and-cache helper is a separate small script, not that one.
 
 ## Boundaries
 
