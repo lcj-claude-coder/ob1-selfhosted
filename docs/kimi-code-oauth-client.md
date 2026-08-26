@@ -11,25 +11,25 @@ client shape: a local [Kimi Code](https://www.kimi.com/code) CLI, which is
 **also a public PKCE client — but one whose interactive login registers
 exclusively through Dynamic Client Registration (DCR)**.
 
-> **Unattended or multi-host? Prefer a service account instead.** If the
-> caller is an automation rather than an interactive user — or you run Kimi
-> Code on several machines and don't want one DCR-created application per
-> login per host — use the [client-credentials service-account
-> route](service-account-oauth-client.md) with Kimi Code's
-> `bearerTokenEnvVar` plus a launch-time token-minting wrapper (sketch below).
-> It needs no DCR window, no browser, and a single pre-registered M2M
-> application. This doc's DCR flow remains the route for user-identity
-> interactive logins.
+> **Unattended or multi-host? Prefer a service account instead.** If the caller
+> is an automation rather than an interactive user — or you run Kimi Code on
+> several machines and don't want one DCR-created application per login per host
+> — use the
+> [client-credentials service-account route](service-account-oauth-client.md)
+> with Kimi Code's `bearerTokenEnvVar` plus a launch-time token-minting wrapper
+> (sketch below). It needs no DCR window, no browser, and a single
+> pre-registered M2M application. This doc's DCR flow remains the route for
+> user-identity interactive logins.
 
 Kimi Code's MCP server configuration (`mcp.json`) has no field for a
 pre-registered OAuth client ID (still true as of CLI 0.38.0 — the HTTP-server
-fields are `url`, `auth`, `bearerTokenEnvVar`, headers, and tool/timeout
-options only), and its OAuth flow requires the authorization server to
-advertise a `registration_endpoint`. The pre-registered Native-client route
-that is _preferred_ for Codex is therefore **not available** for interactive
-login here: the time-boxed DCR procedure is the only interactive route. If a
-future Kimi Code release adds a static client-ID option, prefer the
-pre-registered route from the Codex doc instead.
+fields are `url`, `auth`, `bearerTokenEnvVar`, headers, and tool/timeout options
+only), and its OAuth flow requires the authorization server to advertise a
+`registration_endpoint`. The pre-registered Native-client route that is
+_preferred_ for Codex is therefore **not available** for interactive login here:
+the time-boxed DCR procedure is the only interactive route. If a future Kimi
+Code release adds a static client-ID option, prefer the pre-registered route
+from the Codex doc instead.
 
 Note the registration's lifetime: since CLI 0.33.0, each login flow binds its
 callback listener to a random loopback port and **drops any cached client
@@ -45,9 +45,9 @@ procedure** was verified end-to-end on **2026-07-19** with **Kimi Code CLI
 listing, read-only `session_*` calls, and a refresh token persisted in the
 credential store. The **service-account wiring** (`bearerTokenEnvVar` plus a
 mint-and-cache wrapper) was verified end-to-end on **2026-08-24** with **CLI
-0.38.0**: token mint, MCP `initialize`, and tool listing with no DCR window
-and no browser. The per-login re-registration behavior described above was
-confirmed against the 0.38.0 binary (`invalidateStaleRegistration`).
+0.38.0**: token mint, MCP `initialize`, and tool listing with no DCR window and
+no browser. The per-login re-registration behavior described above was confirmed
+against the 0.38.0 binary (`invalidateStaleRegistration`).
 
 > **Scope: Auth0, as we run it today.** Same caveat as the Codex doc — this
 > documents the one provider and flow this project operates (Auth0, public PKCE
@@ -70,8 +70,8 @@ With an M2M application created and its subject enrolled per
 [service-account-oauth-client.md](service-account-oauth-client.md), Kimi Code
 itself runs no OAuth flow: the wrapper below performs the OAuth 2.0
 `client_credentials` exchange out of band, and the CLI simply consumes the
-resulting bearer token. Point the server entry at an environment variable
-that holds a fresh access token:
+resulting bearer token. Point the server entry at an environment variable that
+holds a fresh access token:
 
 ```json
 {
@@ -84,10 +84,10 @@ that holds a fresh access token:
 }
 ```
 
-and wrap the CLI launch so the variable is always freshly minted (any
-language; stdlib-only is fine — request `grant_type=client_credentials` with
-`client_secret_post` against the tenant token endpoint, cache the JWT until
-near expiry, print it on stdout):
+and wrap the CLI launch so the variable is always freshly minted (any language;
+stdlib-only is fine — request `grant_type=client_credentials` with
+`client_secret_post` against the tenant token endpoint, cache the JWT until near
+expiry, print it on stdout):
 
 ```sh
 export OPENBRAIN_MCP_TOKEN="$(ob1-mcp-token)"   # mint-or-cache helper
@@ -99,12 +99,12 @@ Keep the client ID + secret in a `0600` file the helper reads — never in
 set, Kimi Code bypasses its OAuth/DCR machinery entirely, so no DCR window is
 ever needed; onboarding another host means copying the helper and its
 credentials file. The env var is read at process start, so a session that
-outlives the token's lifetime needs a restart (resume is sufficient) to pick
-up a fresh one.
+outlives the token's lifetime needs a restart (resume is sufficient) to pick up
+a fresh one.
 
 Note that this repository's tracked helper,
 [`scripts/verify-service-account.ts`](../scripts/verify-service-account.ts), is
-a *smoke test* for the same grant — it deliberately never prints the token, so
+a _smoke test_ for the same grant — it deliberately never prints the token, so
 it proves the wiring end to end but cannot feed `bearerTokenEnvVar`. The
 launch-time mint-and-cache helper is a separate small script, not that one.
 
@@ -121,7 +121,7 @@ launch-time mint-and-cache helper is a separate small script, not that one.
   ingress disabled.
 - Kimi Code supports `bearerTokenEnvVar` for HTTP MCP servers — a **static**
   token is not an alternative here, because this deployment enables no
-  `x-brain-key` door. (A *short-lived OAuth bearer* injected through
+  `x-brain-key` door. (A _short-lived OAuth bearer_ injected through
   `bearerTokenEnvVar` is exactly what the service-account sketch above does.)
 
 ## Prerequisites
