@@ -206,9 +206,10 @@ is a client_secret paste mismatch — see the failure-mode catalog in
 > public PKCE client with no secret, authorized per Codex account, per machine.
 > See [`docs/codex-oauth-client.md`](../../docs/codex-oauth-client.md).
 >
-> **Connecting a local Kimi Code CLI?** Same public-PKCE shape, but registered
-> exclusively through a time-boxed Dynamic Client Registration window (Kimi Code
-> has no pre-registered-client option). See
+> **Connecting a local Kimi Code CLI?** Same public-PKCE shape for interactive
+> login, registered through a time-boxed Dynamic Client Registration window
+> (Kimi Code has no pre-registered-client option). For automation or multi-host
+> use, prefer the unattended service-account route below instead. See
 > [`docs/kimi-code-oauth-client.md`](../../docs/kimi-code-oauth-client.md).
 
 ### Connect an unattended agent

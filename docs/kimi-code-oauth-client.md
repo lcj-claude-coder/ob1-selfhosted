@@ -52,9 +52,11 @@ no browser. The per-login re-registration behavior described above was confirmed
 against the 0.38.0 binary (`invalidateStaleRegistration`).
 
 > **Scope: Auth0, as we run it today.** Same caveat as the Codex doc — this
-> documents the one provider and flow this project operates (Auth0, public PKCE
-> clients). Kimi Code speaks standard OAuth 2.1 + PKCE + RFC 7591 DCR, so other
-> OIDC providers almost certainly work — we just don't run them.
+> documents the one provider this project operates (Auth0) and the two flows we
+> use with it: public PKCE clients for interactive login, and
+> `client_credentials` service accounts for automation. Kimi Code speaks
+> standard OAuth 2.1 + PKCE + RFC 7591 DCR, so other OIDC providers almost
+> certainly work — we just don't run them.
 
 > **Tenant membership control comes first.** Same as the Codex doc: decide who
 > may enroll in the tenant _before_ wiring up any client — the traps (an open
@@ -133,7 +135,11 @@ launch-time mint-and-cache helper is a separate small script, not that one.
   `x-brain-key` door. (A _short-lived OAuth bearer_ injected through
   `bearerTokenEnvVar` is exactly what the service-account sketch above does.)
 
-## Prerequisites
+## Prerequisites (interactive DCR route)
+
+These checks precede the DCR login below. The service-account route skips this
+section entirely — its prerequisites are the provider-side procedure in
+[service-account-oauth-client.md](service-account-oauth-client.md).
 
 1. Confirm the protected resource is healthy and advertises the expected issuer
    (same checks as the Codex doc):
@@ -161,9 +167,9 @@ launch-time mint-and-cache helper is a separate small script, not that one.
 
 ## Enable the DCR window (operator step)
 
-Kimi Code cannot use a pre-registered client, so open a **time-boxed** DCR
-window before login — the same procedure the Codex doc documents as its
-fallback:
+Kimi Code cannot use a pre-registered client for interactive login, so open a
+**time-boxed** DCR window before login — the same procedure the Codex doc
+documents as its fallback:
 
 1. In the OpenBrain **Auth0 API → Settings**, set the **default third-party
    permissions** to the minimum OpenBrain needs (DCR-registered clients are
@@ -176,12 +182,17 @@ Plan to disable DCR **immediately after** the login completes. Open DCR lets
 anyone register a third-party application against your tenant during that
 window, while the Domain-Level login connection remains available to third-party
 applications after DCR is disabled. Treat both as deliberate exposure. The
-registered client and its refresh token keep working after DCR is off — **do not
-delete** the newly DCR-created application (normally
-`kimi-code (<server-name>)`, which is `kimi-code (openbrain)` for the entry
-below); deleting it forces re-registration through another DCR window. Because
-Kimi Code has no pre-registered route, each _additional_ Kimi Code host needs
-this window opened again.
+registered client and its refresh token keep working after DCR is off. Since
+every login re-registers (the registration-lifetime note above), the tenant
+accumulates identically named `kimi-code (openbrain)` applications over time:
+**do not delete** the one backing a live host's credential store — its
+`client_id` is in that host's
+`~/.kimi-code/credentials/mcp/openbrain-*-client.json`, and deleting it
+invalidates the stored refresh token, killing the live session. Registrations no
+live credential store references are superseded and safe to remove. And because
+registration is per login, not per host, this window is needed again for each
+_additional_ Kimi Code host **and for any re-login on the same host** (logout,
+credential loss, refresh-token expiry or revocation).
 
 ## Configure and log in
 
@@ -273,10 +284,12 @@ Same as the Codex doc: read-only `session_search`/`session_lookup` first, then
 the full `+++`-delimited TOML staging payload to `session_capture`, **recording
 the returned integer `id`** back into the payload (omission on re-capture mints
 a duplicate), and verifying the round-trip reports an _update_. Server-side
-provenance should show `source = 'funnel'` with a non-null `source_node` (the
-JWT subject) — an authentication-door label, not a network-path claim; the
-tailnet client is expected to arrive via Caddy's `@tailnet` branch. The SQL
-check and the Caddy-log path discrimination are in
+provenance should show `source = 'funnel'` for an interactive DCR login, or
+`source = 'service'` for a client-credentials service account — in both cases
+with a non-null `source_node` (the verified JWT subject). That label is an
+authentication-door marker, not a network-path claim; the tailnet client is
+expected to arrive via Caddy's `@tailnet` branch. The SQL check and the
+Caddy-log path discrimination are in
 [codex-oauth-client.md](codex-oauth-client.md#smoke-test-and-staged-session-import).
 
 ## Restart and refresh verification
