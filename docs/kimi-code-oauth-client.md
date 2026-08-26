@@ -101,12 +101,14 @@ exec kimi "$@"
 
 Check the substitution's status on its own line, as above: a bare
 `export OPENBRAIN_MCP_TOKEN="$(ob1-mcp-token)"` masks the helper's failure
-(`export` exits 0 even when the substitution failed), so a failed mint would
-launch Kimi with an empty token and surface later as a confusing 401. If you
-would rather never block the CLI on token plumbing, warn and
-`unset
-OPENBRAIN_MCP_TOKEN` before `exec` instead of exiting — but do one or the
-other explicitly. The token cache holds a live bearer credential for its
+(`export` exits 0 even when the substitution failed). A failed mint would launch
+Kimi with an empty token, which the CLI rejects before connecting: the server
+ends in a failed state with a missing/empty bearer-token configuration error,
+not a 401 from the deployment. If you would rather never block the CLI on token
+plumbing, warn and `unset OPENBRAIN_MCP_TOKEN` before `exec` instead of exiting
+— Kimi itself then starts with this MCP server unavailable (an unset variable
+does not fall back to DCR while `bearerTokenEnvVar` is configured) — but do one
+or the other explicitly. The token cache holds a live bearer credential for its
 remaining lifetime, so it deserves the same owner-only treatment as the
 credentials file.
 
