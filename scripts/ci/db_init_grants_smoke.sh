@@ -38,6 +38,28 @@ expect_rejected() {
 # after 02-observability.sql.
 run_assertion >/dev/null
 
+# Table SELECT alone is insufficient for a backup: schema USAGE is also
+# required. Prove the actual dump fails on drift and recovers after migration.
+dump_oauth_as_backup() {
+  docker exec -e PGPASSWORD="$OPENBRAIN_READONLY_PASSWORD" "$DB_INIT_CONTAINER" \
+    pg_dump -w -h 127.0.0.1 -U openbrain_readonly -d "$POSTGRES_DB" \
+    --schema=oauth_auth -Fc > /dev/null
+}
+dump_oauth_as_backup
+super_psql -v ON_ERROR_STOP=1 -c \
+  "REVOKE USAGE ON SCHEMA oauth_auth FROM openbrain_readonly" >/dev/null
+test "$(super_psql -tAc \
+  "SELECT has_table_privilege('openbrain_readonly', 'oauth_auth.allowed_subject', 'SELECT')")" = t
+if dump_output=$(dump_oauth_as_backup 2>&1); then
+  echo "::error::OAuth backup dump unexpectedly succeeded without schema USAGE"
+  exit 1
+fi
+grep -Fq 'permission denied for schema oauth_auth' <<< "$dump_output"
+expect_rejected "OAuth backup schema USAGE drift" "backup cannot safely dump OAuth admission"
+apply_sql db/13-oauth-subjects.sql >/dev/null
+run_assertion >/dev/null
+dump_oauth_as_backup
+
 # Backups must neither resurrect a revoked subject nor wipe admission state.
 # Table-level checks alone miss column-only UPDATE/INSERT/REFERENCES grants.
 for privilege in INSERT UPDATE DELETE TRUNCATE REFERENCES TRIGGER \
