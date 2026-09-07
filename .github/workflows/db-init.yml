@@ -95,6 +95,7 @@ on:
       - "deploy/qubes/app-qube/auth-events-summary.timer"
       - "deploy/qubes/db-qube/pg_hba.snippet.conf"
       - "scripts/upgrade-enable-auth-rollup-role.sh"
+      - "scripts/upgrade-enable-token-admin-role.sh"
       - "scripts/ci/**"
       - ".github/workflows/db-init.yml"
   push:

@@ -42,6 +42,7 @@ const representativeChanges = [
   "deploy/qubes/ingress-qube/openbrain-log-sink-dump_test.sh",
   "deploy/qubes/app-qube/rc.local",
   "scripts/ci/db_init_auth_smoke.sh",
+  "scripts/upgrade-enable-token-admin-role.sh",
   ".github/workflows/db-init.yml",
 ];
 const roleContractConsumers = [
