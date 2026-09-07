@@ -730,8 +730,9 @@ export async function probeDbAtBoot(
       if (oauthSchema.rows[0]?.[0] !== true) {
         throw new RequiredSchemaError(
           `[db] Missing OAuth admission schema. Apply db/13-oauth-subjects.sql, ` +
-            `run db/03-grants-assertion.sql, then import existing subjects with ` +
-            `subject-admin import-env before starting this server version.`,
+            `then run db/03-grants-assertion.sql before starting server 1.26.0. ` +
+            `If OAuth is enabled, also import legacy subjects with subject-admin ` +
+            `import-env or enroll them with subject-admin allow before the roll.`,
         );
       }
       // Only reference the ledger after to_regclass proved it exists. Putting

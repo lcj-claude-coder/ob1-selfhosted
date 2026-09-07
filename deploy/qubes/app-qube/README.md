@@ -262,10 +262,11 @@ hook: an operator who renamed that role sets `POSTGRES_USER` to match the
 empty `-U` is not equivalent — libpq treats it as absent and substitutes the
 **login account's** name, which the db qube's `pg_hba` does not recognize.
 
-Fedora's `postgresql` package provides the host `psql` client; it is commonly
-already present beside the `pg_dump` client used by the encrypted backup. If it
-is absent, install the package in this qube's Fedora **template** — an
-AppVM-local install disappears on reboot.
+The credential provisioning helper requires **psql 15+** for `\getenv`. Fedora's
+`postgresql` package provides the host `psql` client; it is commonly already
+present beside the `pg_dump` client used by the encrypted backup. If it is
+absent, install the package in this qube's Fedora **template** — an AppVM-local
+install disappears on reboot.
 
 ### Which migration each server version requires
 
@@ -280,22 +281,21 @@ before the relations it asserts on exist. The db qube records the same canonical
 order
 ([First boot / provisioning](../db-qube/README.md#first-boot--provisioning)).
 
-| Server                       | Migration                                                                  | Additional requirement                                                                                                                                    |
-| ---------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1.7.0                        | `db/05-hybrid-search.sql`                                                  | pgvector 0.8.0+ (filtered iterative scans)                                                                                                                |
-| 1.9.0                        | `db/06-spaces.sql`                                                         | PostgreSQL 15+ (`NULLS NOT DISTINCT`); superuser, not owner                                                                                               |
-| 1.16.0                       | `db/07-metadata-degradation.sql`                                           | from 1.17.0, an explicit `METADATA_FALLBACK_POLICY` in `.env`                                                                                             |
-| 1.19.0                       | `db/08-access-tokens.sql`                                                  | —                                                                                                                                                         |
-| 1.20.0 (historical)          | `db/02-observability.sql` (re-apply; converges `mcp_auth_events` in place) | historical env admission; current upgrades must import it into migration 13 before rolling MCP                                                            |
-| Arc B                        | `db/02-observability.sql`, then `db/09-retire-corpus-funnel.sql`           | sink cutover complete; both legacy tables archived, verified, and empty; retired HBA rules removed                                                        |
-| 1.22.0                       | `db/10-thought-mutations.sql`                                              | superuser (table-owner SECURITY DEFINER helper; narrows the app's thoughts UPDATE to content columns); rerun `03-grants-assertion.sql` after              |
-| 1.24.0                       | `db/11-session-update-grants.sql`                                          | database owner; narrows session UPDATE to content columns and removes artifact UPDATE; rerun `03-grants-assertion.sql` after                              |
-| 1.25.0                       | `db/12-auth-audit-grants.sql`                                              | first provision `openbrain_auth_rollup` and install/reload its HBA lines; rerun `03-grants-assertion.sql` after                                           |
-| Unreleased (OAuth admission) | `db/13-oauth-subjects.sql`                                                 | required with OAuth on or off; provision credential administrator and HBA first, then migrate/assert and import/verify OAuth subjects before the MCP roll |
+| Server              | Migration                                                                  | Additional requirement                                                                                                                                    |
+| ------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.7.0               | `db/05-hybrid-search.sql`                                                  | pgvector 0.8.0+ (filtered iterative scans)                                                                                                                |
+| 1.9.0               | `db/06-spaces.sql`                                                         | PostgreSQL 15+ (`NULLS NOT DISTINCT`); superuser, not owner                                                                                               |
+| 1.16.0              | `db/07-metadata-degradation.sql`                                           | from 1.17.0, an explicit `METADATA_FALLBACK_POLICY` in `.env`                                                                                             |
+| 1.19.0              | `db/08-access-tokens.sql`                                                  | —                                                                                                                                                         |
+| 1.20.0 (historical) | `db/02-observability.sql` (re-apply; converges `mcp_auth_events` in place) | historical env admission; current upgrades must import it into migration 13 before rolling MCP                                                            |
+| Arc B               | `db/02-observability.sql`, then `db/09-retire-corpus-funnel.sql`           | sink cutover complete; both legacy tables archived, verified, and empty; retired HBA rules removed                                                        |
+| 1.22.0              | `db/10-thought-mutations.sql`                                              | superuser (table-owner SECURITY DEFINER helper; narrows the app's thoughts UPDATE to content columns); rerun `03-grants-assertion.sql` after              |
+| 1.24.0              | `db/11-session-update-grants.sql`                                          | database owner; narrows session UPDATE to content columns and removes artifact UPDATE; rerun `03-grants-assertion.sql` after                              |
+| 1.25.0              | `db/12-auth-audit-grants.sql`                                              | first provision `openbrain_auth_rollup` and install/reload its HBA lines; rerun `03-grants-assertion.sql` after                                           |
+| 1.26.0              | `db/13-oauth-subjects.sql`                                                 | required with OAuth on or off; provision credential administrator and HBA first, then migrate/assert and import/verify OAuth subjects before the MCP roll |
 
-The next, unreleased OAuth-admission server additionally requires
-`db/13-oauth-subjects.sql` **even when OAuth is disabled**. A release number has
-not yet been assigned to this change.
+Server 1.26.0 additionally requires `db/13-oauth-subjects.sql` **even when OAuth
+is disabled**.
 
 Migration 08 is required by 1.19.0 **even when native tokens are disabled**.
 `ENABLE_NATIVE_TOKENS` gates the credential door, not the schema: the server's
@@ -334,10 +334,9 @@ version. Apply migrations before the roll, not with it.
    With this topology's nonblank `DB_HOST`, the helper uses host `psql` and
    passes only the admin and new role passwords to that client.
 
-   For the OAuth-admission release, also set a distinct
-   `OPENBRAIN_TOKEN_ADMIN_PASSWORD` in the app deployment's owner-only `.env`.
-   Install/reload the two database-scoped administrator HBA entries on the DB
-   qube as described in
+   For 1.26.0, also set a distinct `OPENBRAIN_TOKEN_ADMIN_PASSWORD` in the app
+   deployment's owner-only `.env`. Install/reload the two database-scoped
+   administrator HBA entries on the DB qube as described in
    [OAuth admission](../../../docs/oauth-subjects.md#split-qubes-administrator-path).
    Then, **from `deploy/qubes/app-qube`**, provision the shared credential
    administrator through the existing ConnectTCP route:
@@ -421,10 +420,11 @@ refuses to source a symlink, a file owned by another user, or a file with any
 group/other permissions; values in this file take precedence over inherited
 environment values.
 
-Fedora's `postgresql` package provides the host `psql` client; it is commonly
-already present beside the `pg_dump` client used by the encrypted backup. If it
-is absent, install the package in this qube's Fedora **template** and restart
-the app qube—an AppVM-local package install disappears on reboot.
+The credential provisioning helper requires **psql 15+** for `\getenv`. Fedora's
+`postgresql` package provides the host `psql` client; it is commonly already
+present beside the `pg_dump` client used by the encrypted backup. If it is
+absent, install the package in this qube's Fedora **template** and restart the
+app qube—an AppVM-local package install disappears on reboot.
 
 **Install on the app qube** as the regular user, from the repository checkout:
 

@@ -50,11 +50,11 @@ not change ownership or memory-space access.
 
 ## Upgrade an existing database
 
-Migration 13 is required by the new server even when OAuth is disabled. Init
-scripts run only on fresh data directories. For existing data, preserve the
-previous server image and operator configuration, take and verify a backup, and
-perform the following during a deployment window. Keep admission changes frozen
-until the new server passes its smoke checks.
+Server 1.26.0 requires migration 13 even when OAuth is disabled. Init scripts
+run only on fresh data directories. For existing data, preserve the previous
+server image and operator configuration, take and verify a backup, and perform
+the following during a deployment window. Keep admission changes frozen until
+the new server passes its smoke checks.
 
 1. Put a distinct `OPENBRAIN_TOKEN_ADMIN_PASSWORD` in the deployment's
    owner-only `.env`. It is used only by the tools profile. The role is
@@ -67,7 +67,9 @@ until the new server passes its smoke checks.
    ```
 
    For an external database, including the Qubes app→DB ConnectTCP path, run
-   native `psql` from the application host via the same helper:
+   native **psql 15 or newer** from the application host via the same helper.
+   `\getenv`, used to read credentials without command arguments, was added in
+   [PostgreSQL 15](https://www.postgresql.org/docs/15/release-15.html#RELEASE-15-PSQL):
 
    ```bash
    COMPOSE_DIR="$PWD" bash ../../../scripts/upgrade-enable-token-admin-role.sh --direct
@@ -117,8 +119,11 @@ until the new server passes its smoke checks.
 
 4. Verify the inventory, remove both legacy lists from `.env`, then recreate
    only the MCP service and smoke each existing client. Check the auth audit for
-   the expected admitted subjects and `subject_not_allowed` failures. An empty
-   or entirely revoked table rejects every Bearer and produces a loud boot
+   the expected admitted subjects and `subject_not_allowed` failures. An
+   `admission_unavailable` denial means the lookup failed (for example, table,
+   grants, or connectivity), rather than a bad token; check the DB path. Audit
+   delivery is best-effort and can also fail during a database-wide outage. An
+   empty or entirely revoked table rejects every Bearer and produces a loud boot
    warning. `/health` remains available.
 
 The bridge is deliberately an explicit administrator step, rather than runtime

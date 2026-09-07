@@ -558,5 +558,8 @@ Deno.test("probeDbAtBoot: missing OAuth admission requires migration before star
     Error,
   );
   assertStringIncludes(error.message, "db/13-oauth-subjects.sql");
+  assertStringIncludes(error.message, "server 1.26.0");
+  assertStringIncludes(error.message, "If OAuth is enabled");
+  assertStringIncludes(error.message, "subject-admin allow");
   assertEquals(client.releaseCalls, 1);
 });

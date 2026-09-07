@@ -288,7 +288,10 @@ export function createMcpServer(
     // audience changes and direct artifact re-parenting (migration 11).
     // 1.25.0: the request-path DB role cannot update/delete auth audit rows;
     // retention uses the separate openbrain_auth_rollup credential.
-    version: "1.25.0",
+    // 1.26.0: OAuth subject admission and revocation are database-managed.
+    // Requires migration 13; OAuth-enabled upgrades import or enroll subjects
+    // with subject-admin before the server roll. Legacy env lists cannot admit.
+    version: "1.26.0",
   });
 
   // ChatGPT-compatible search/fetch shapes (read-only). The standard names

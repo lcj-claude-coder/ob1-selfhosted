@@ -165,7 +165,7 @@ async function runHeadlessIntegrationTest(): Promise<void> {
     assertEquals(success.code, 0, success.stderr);
     assertStringIncludes(
       success.stdout,
-      "OK: browserless client_credentials authenticated to open-brain-homelab 1.25.0",
+      "OK: browserless client_credentials authenticated to open-brain-homelab 1.26.0",
     );
     assertStringIncludes(
       success.stdout,
