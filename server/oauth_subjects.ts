@@ -10,14 +10,7 @@ export type OAuthSubjectLookup = (
 ) => Promise<OAuthSubjectKind | null>;
 
 export function validateOAuthSubject(subject: string): string {
-  if (
-    !isOAuthSubject(subject) || subject.trim() !== subject ||
-    [...subject].some((character) => {
-      const point = character.codePointAt(0)!;
-      return (point >= 0x80 && point <= 0x9f) ||
-        (point >= 0xd800 && point <= 0xdfff);
-    })
-  ) throw new Error("Invalid OAuth subject");
+  if (!isOAuthSubject(subject)) throw new Error("Invalid OAuth subject");
   return subject;
 }
 

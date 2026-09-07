@@ -276,8 +276,8 @@ automatically when those claims are present), nothing else:
    membership, not string equality);
 4. **Expiry** — `exp` must be present and valid (RFC 7519 makes it optional; the
    resource server must demand it);
-5. **Subject** — `sub` must be present and a bounded string free of ASCII
-   control characters;
+5. **Subject** — `sub` must be present and a bounded string without leading or
+   trailing whitespace, C0/C1 control characters, DEL, or unpaired surrogates;
 6. **Authorization** — the verified `sub` must appear on the
    `oauth_auth.allowed_subject` table as an active row. This list **fails
    closed**: with the OAuth door enabled and no active admitted subjects, every

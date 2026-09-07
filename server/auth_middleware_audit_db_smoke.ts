@@ -329,6 +329,22 @@ try {
     assertEquals(invalidRows[0].reason, "token_validation_failed");
     assertEquals(invalidRows[0].subject, null);
     assertEquals(lookupCalls, 0);
+    // Properly signed but malformed subjects fail token shape validation,
+    // before the lookup boundary that classifies storage errors.
+    for (
+      const subject of [" leading", "trailing\u00a0", "c1\u0085", "lone\ud800"]
+    ) {
+      const res = await unavailable.request("/mcp", {
+        headers: { authorization: `Bearer ${await signToken(subject)}` },
+      });
+      assertEquals(res.status, 401);
+      assertEquals(await res.text(), expectedBody);
+      const rows = await drainRows(1);
+      assertEquals(rows.length, 1);
+      assertEquals(rows[0].reason, "token_validation_failed");
+      assertEquals(rows[0].subject, null);
+      assertEquals(lookupCalls, 0);
+    }
     for (const brainKey of [null, "wrong-key"]) {
       const headers = new Headers({ authorization: `Bearer ${valid}` });
       if (brainKey) headers.set("x-brain-key", brainKey);
