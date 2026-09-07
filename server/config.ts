@@ -418,15 +418,9 @@ function oauthSubjectList(
   return subjects;
 }
 
-// Auth0's default access-token profile identifies client-credentials tokens
-// with the signed `gty = "client-credentials"` claim. Its RFC 9068 profile and
-// many other issuers provide no grant-type claim even when the JWT is otherwise
-// valid. This optional exact-subject allowlist supplies that fallback.
-//
-// It changes attribution only, never authentication or authorization: every
-// token still has to pass signature/issuer/audience/algorithm/exp/sub checks
-// AND the OAUTH_ALLOWED_SUBJECTS authorization gate below, and the verified
-// `sub` remains the RLS principal. Values are not logged.
+// Transition-release input validation only. These lists NEVER authorize or
+// classify requests. subject-admin import-env reads them with the dedicated
+// admin credential before startup; index.ts warns until they are removed.
 export const OAUTH_SERVICE_ACCOUNT_SUBJECTS = oauthSubjectList(
   "OAUTH_SERVICE_ACCOUNT_SUBJECTS",
   optionalTrimmed("OAUTH_SERVICE_ACCOUNT_SUBJECTS"),
@@ -437,26 +431,8 @@ if (OAUTH_SERVICE_ACCOUNT_SUBJECTS.size > 0 && !ENABLE_OAUTH) {
   );
 }
 
-// The OAuth door's AUTHORIZATION gate — the in-app subject allowlist.
-//
-// Verification (signature/issuer/audience/algorithm/exp/sub shape) proves the
-// token came from the configured tenant; it says nothing about WHICH accounts
-// the operator intends to admit. Tenant configuration alone must not be the
-// boundary: an Auth0 dashboard misconfiguration (an accidentally-enabled
-// social connection, an unintended signup flow) would otherwise equal full
-// access. `verifyBearer` therefore rejects any verified token whose `sub` is
-// not on this list.
-//
-// FAIL CLOSED: when the OAuth door is enabled and this list is unset or
-// empty, EVERY Bearer token is rejected. Misconfiguration denies rather than
-// allows. (Deliberately a runtime denial, not a boot refusal: on a
-// mixed-door deployment the x-brain-key door keeps working, and on an
-// OAuth-only deployment a hard boot-loop would take /health and /ready down
-// with it. index.ts warns loudly at boot instead.)
-//
-// Interaction with OAUTH_SERVICE_ACCOUNT_SUBJECTS: that list stays
-// attribution-only. A machine subject must ALSO appear here to be admitted —
-// listing a subject there never grants access.
+// Retained for one migration release, with the same fail-fast input checks.
+// Database admission remains authoritative even if this set is nonempty.
 export const OAUTH_ALLOWED_SUBJECTS = oauthSubjectList(
   "OAUTH_ALLOWED_SUBJECTS",
   optionalTrimmed("OAUTH_ALLOWED_SUBJECTS"),

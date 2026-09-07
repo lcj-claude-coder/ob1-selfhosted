@@ -33,9 +33,8 @@ import {
   ENABLE_OAUTH,
   JWKS_FETCH_TIMEOUT_MS,
   MCP_ACCESS_KEY,
-  OAUTH_ALLOWED_SUBJECTS,
-  OAUTH_SERVICE_ACCOUNT_SUBJECTS,
 } from "./config.ts";
+import type { OAuthSubjectKind, OAuthSubjectLookup } from "./oauth_subjects.ts";
 import {
   type AuthFailureReason,
   logAuthFailure,
@@ -233,8 +232,8 @@ export type NativeAccessTokenVerifier = (
 
 type VerifiedBearerPayload = JWTPayload & { sub: string };
 
-// Thrown by `verifyBearer` when a token passes every cryptographic check but
-// its verified `sub` is not on the OAUTH_ALLOWED_SUBJECTS allowlist. Carries
+// Thrown during admission when a token passes every cryptographic check but
+// its verified `sub` is not admitted by the database allowlist. Carries
 // the VERIFIED subject so `createRequireAuth` can put it on the audit row —
 // this is the one rejection class where a real tenant-minted identity was
 // refused, and the operator needs to see which. Never surfaces in the
@@ -245,6 +244,9 @@ class SubjectNotAllowedError extends Error {
     super("OAuth token subject is not on the allowlist");
   }
 }
+
+// Audit classification only. Never retain or expose the underlying DB error.
+class OAuthAdmissionUnavailableError extends Error {}
 
 async function verifyBearer(token: string): Promise<VerifiedBearerPayload> {
   if (!jwks) throw new Error("OAuth not enabled");
@@ -275,18 +277,6 @@ async function verifyBearer(token: string): Promise<VerifiedBearerPayload> {
   if (!isOAuthSubject(payload.sub)) {
     throw new Error("OAuth token subject is invalid");
   }
-  // AUTHORIZATION, after authentication: the checks above prove the token
-  // came from the configured tenant; this one asks whether the operator
-  // intends to admit that account at all. An unset/empty
-  // OAUTH_ALLOWED_SUBJECTS means the `has()` below can never pass — the
-  // documented fail-closed posture (config.ts) — so a tenant-side
-  // misconfiguration (open social connection, unintended signup flow) stops
-  // here instead of equaling full access. Ordered after the subject-shape
-  // check so only a well-formed verified identity is ever compared or
-  // carried onto the audit row.
-  if (!OAUTH_ALLOWED_SUBJECTS.has(payload.sub)) {
-    throw new SubjectNotAllowedError(payload.sub);
-  }
   return payload as VerifiedBearerPayload;
 }
 
@@ -295,13 +285,16 @@ async function verifyBearer(token: string): Promise<VerifiedBearerPayload> {
 // providers may instead require the exact-subject mapping. Neither path changes
 // the verified subject or grants access — it only makes machine identity
 // explicit in provenance.
-export function oauthDoorFor(payload: VerifiedBearerPayload): Extract<
+export function oauthDoorFor(
+  payload: VerifiedBearerPayload,
+  kind: OAuthSubjectKind,
+): Extract<
   AuthDoor,
   "funnel" | "service"
 > {
   if (
     payload.gty === "client-credentials" ||
-    OAUTH_SERVICE_ACCOUNT_SUBJECTS.has(payload.sub)
+    kind === "service"
   ) {
     return "service";
   }
@@ -539,6 +532,7 @@ async function unauthorized(
 // request.
 export function createRequireAuth(
   verifyNativeToken: NativeAccessTokenVerifier | null = null,
+  lookupSubject: OAuthSubjectLookup | null = null,
 ): MiddlewareHandler<{ Variables: AppVariables }> {
   return async (c, next) => {
     // x-brain-key fast path — cheaper than JWT crypto, but only short-circuit
@@ -607,6 +601,7 @@ export function createRequireAuth(
     // 'subject_not_allowed' audit reason + subject column below; the
     // response stays the uniform envelope.
     let disallowedSubject: string | null = null;
+    let admissionUnavailable = false;
     if (ENABLE_OAUTH) {
       const authz = c.req.header("authorization") ?? "";
       const m = /^Bearer\s+(.+)$/i.exec(authz);
@@ -616,13 +611,21 @@ export function createRequireAuth(
           // Capture the verified payload's `sub` claim, then classify the
           // OAuth credential as a user (`funnel`) or machine (`service`).
           // `verifyBearer` requires and runtime-validates `sub` (see above),
-          // enforces the OAUTH_ALLOWED_SUBJECTS authorization gate, and so
-          // only a bounded non-empty ADMITTED string reaches either context
-          // field. The single-vs-dual-door decision (deliberately open)
-          // remains separate scope — the source-marker work doesn't
-          // depend on either outcome of that deliberation.
+          // performs crypto before the per-request DB admission lookup. Missing
+          // wiring, empty/revoked admission, and DB failures all fail closed.
+          // Legacy env lists are never a fallback for database admission.
           const payload = await verifyBearer(m[1].trim());
-          const door = oauthDoorFor(payload);
+          if (!lookupSubject) throw new OAuthAdmissionUnavailableError();
+          let kind;
+          try {
+            kind = await lookupSubject(payload.sub);
+          } catch {
+            throw new OAuthAdmissionUnavailableError();
+          }
+          if (kind !== "user" && kind !== "service") {
+            throw new SubjectNotAllowedError(payload.sub);
+          }
+          const door = oauthDoorFor(payload, kind);
           c.set("door", door);
           c.set("sub", payload.sub);
           c.set("tokenLabel", null);
@@ -639,8 +642,11 @@ export function createRequireAuth(
         } catch (err) {
           if (err instanceof SubjectNotAllowedError) {
             disallowedSubject = err.sub;
+          } else if (err instanceof OAuthAdmissionUnavailableError) {
+            admissionUnavailable = true;
           }
-          // Fall through to 401 with a token-validation reason below.
+          // Fall through to the uniform 401; the audit distinguishes admission
+          // storage failures from absent/revoked rows and token validation.
         }
       }
     }
@@ -660,6 +666,7 @@ export function createRequireAuth(
     // refused it), and the audit row's subject column is only meaningful
     // under this code.
     if (disallowedSubject !== null) code = "subject_not_allowed";
+    else if (admissionUnavailable) code = "admission_unavailable";
     else if (brainKeyTried && bearerTried) code = "invalid_credentials";
     else if (brainKeyTried) code = "invalid_brain_key";
     else if (bearerTried) code = "token_validation_failed";
@@ -670,8 +677,8 @@ export function createRequireAuth(
 }
 
 // Backward-compatible default for unit-test and library consumers. Production
-// wiring uses createRequireAuth(authenticateAccessToken(pool)) in index.ts.
-// When native tokens are disabled (the server default), behavior is identical.
+// wiring injects both DB lookups in index.ts. Without explicit wiring, both
+// database-backed credential classes fail closed; the legacy static key works.
 export const requireAuth = createRequireAuth();
 
 // Public metadata endpoint per RFC 9728. Wired in index.ts only when

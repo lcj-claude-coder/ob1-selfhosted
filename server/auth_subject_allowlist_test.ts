@@ -1,3 +1,4 @@
+import { makeSubjectLookup } from "./api_test_support.ts";
 // Tests for the OAUTH_ALLOWED_SUBJECTS authorization gate with a NON-EMPTY
 // allowlist (the fail-closed empty-list posture lives in
 // auth_subject_allowlist_failclosed_test.ts — module-level config caching
@@ -53,7 +54,11 @@ async function runSubjectAllowlistTest(t: Deno.TestContext): Promise<void> {
     jwksUrl: JWKS_URL,
   });
   const restoreFetch = fixture.installFetchMock();
-  const { requireAuth } = await import("./auth.ts");
+  const { createRequireAuth } = await import("./auth.ts");
+  const requireAuth = createRequireAuth(
+    null,
+    makeSubjectLookup(TEST_ENV.OAUTH_ALLOWED_SUBJECTS),
+  );
   // Echo the middleware-populated identity to prove the request crossed
   // the authorization gate, rather than merely observing a 200 status.
   const app = makeAuthTestApp(requireAuth, (context) =>

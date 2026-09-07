@@ -11,9 +11,9 @@ source "$SCRIPT_DIR/db_init_common.sh"
 
 phase="${1:-all}"
 case "$phase" in
-  all|tokens|audit) ;;
+  all|tokens|subjects|audit) ;;
   *)
-    echo "usage: ${0##*/} [all|tokens|audit]" >&2
+    echo "usage: ${0##*/} [all|tokens|subjects|audit]" >&2
     exit 2
     ;;
 esac
@@ -64,4 +64,36 @@ smoke_step "Smoke test — middleware-to-audit seam lands the exact rows"
 # and asserts the exact rows per credential scenario, including
 # subject_not_allowed precedence over the dual-credential collapse.
 run_deno_db_smoke server/auth_middleware_audit_db_smoke.ts
+fi
+
+if [[ "$phase" == "all" || "$phase" == "subjects" ]]; then
+smoke_step "Smoke test — OAuth admission, immediate revoke, and atomic legacy import"
+# Remove only this disposable fixture's new schema to rehearse a real upgrade.
+# The rollback must restore the pre-migration catalog with no half-installed gate.
+super_psql -v ON_ERROR_STOP=1 -c 'DROP SCHEMA oauth_auth CASCADE' >/dev/null
+{
+  echo 'BEGIN;'
+  cat db/13-oauth-subjects.sql db/03-grants-assertion.sql
+  echo 'ROLLBACK;'
+} | super_psql -v ON_ERROR_STOP=1 >/dev/null
+super_psql -v ON_ERROR_STOP=1 -tAc \
+  "SELECT to_regclass('oauth_auth.allowed_subject') IS NULL" | grep -qx t
+apply_sql db/13-oauth-subjects.sql >/dev/null
+apply_sql db/03-grants-assertion.sql >/dev/null
+# Reconcile the dedicated role via the actual psql helper; test both initial
+# enablement and reapply without copying real operator credentials.
+super_psql -v ON_ERROR_STOP=1 -c \
+  'ALTER ROLE openbrain_token_admin NOLOGIN CREATEDB' >/dev/null
+docker exec "$DB_INIT_CONTAINER" mkdir -p /tmp/credential-admin-fixture
+docker exec -i "$DB_INIT_CONTAINER" sh -c 'cat > /tmp/credential-admin-fixture/upgrade.sh' \
+  < scripts/upgrade-enable-token-admin-role.sh
+docker exec "$DB_INIT_CONTAINER" touch /tmp/credential-admin-fixture/.env
+for attempt in 1 2; do
+  docker exec -e COMPOSE_DIR=/tmp/credential-admin-fixture -e DB_HOST=127.0.0.1 \
+    "$DB_INIT_CONTAINER" bash /tmp/credential-admin-fixture/upgrade.sh --direct
+done
+super_psql -v ON_ERROR_STOP=1 -tAc \
+  "SELECT rolcanlogin AND NOT rolcreatedb FROM pg_roles WHERE rolname='openbrain_token_admin'" | grep -qx t
+apply_sql db/03-grants-assertion.sql >/dev/null
+run_deno_db_smoke server/oauth_subjects_db_smoke.ts
 fi

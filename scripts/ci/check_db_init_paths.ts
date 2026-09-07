@@ -35,10 +35,14 @@ const patterns = pullRequestPaths as string[];
 const representativeChanges = [
   "db/01-schema.sql",
   "server/auth.ts",
+  "server/oauth_subjects.ts",
+  "server/subject_admin.ts",
+  "server/oauth_subjects_db_smoke.ts",
   "deploy/qubes/ingress-qube/docker-compose.yml",
   "deploy/qubes/ingress-qube/openbrain-log-sink-dump_test.sh",
   "deploy/qubes/app-qube/rc.local",
   "scripts/ci/db_init_auth_smoke.sh",
+  "scripts/upgrade-enable-token-admin-role.sh",
   ".github/workflows/db-init.yml",
 ];
 const roleContractConsumers = [

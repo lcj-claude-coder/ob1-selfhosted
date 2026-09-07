@@ -68,8 +68,9 @@ CREATE TABLE IF NOT EXISTS mcp_auth_events (
   outcome        TEXT NOT NULL DEFAULT 'denied',
   -- Denied rows only (NULL on allowed rows — enforced below). One of:
   -- 'invalid_brain_key', 'token_validation_failed', 'subject_not_allowed'
-  -- (verified Bearer whose sub is not on the OAUTH_ALLOWED_SUBJECTS
-  -- allowlist), 'invalid_credentials' (both doors attempted),
+  -- (verified Bearer without an active database admission row),
+  -- 'admission_unavailable' (lookup failed; no subject/error detail),
+  -- 'invalid_credentials' (both doors attempted),
   -- 'missing_credentials'. Maps to the codes in server/auth_audit.ts. We
   -- store the code form so a future copy-edit to operator-facing text
   -- doesn't break historical analysis.

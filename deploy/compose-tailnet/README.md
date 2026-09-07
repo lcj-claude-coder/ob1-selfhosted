@@ -89,13 +89,14 @@ generic subject mapping, and a browserless verification command are covered in
 > audit, and the outcome-evidence Management API commands are in
 > [Auth0 setup dangers](../../docs/auth0-setup-dangers.md).
 
-> **`OAUTH_ALLOWED_SUBJECTS` is required in practice whenever the OAuth door is
-> on.** Verification proves a token came from your tenant; this comma-separated
-> allowlist of exact `sub` claims says which accounts you actually admit, so an
-> IdP-side misconfiguration (an accidentally-open social connection, an
-> unintended signup flow) cannot equal access. It fails CLOSED: left unset,
-> every Bearer token is rejected and the boot log warns. Machine subjects need
-> listing here too — the service-account mapping above is attribution only.
+> **Enroll every intended OAuth subject in `oauth_auth.allowed_subject`.**
+> Verification proves a token came from your tenant; `subject-admin allow`
+> records which exact `sub` values the operator admits. An empty or entirely
+> revoked table rejects every Bearer and produces a boot warning. Machine
+> subjects also need active rows; `kind=service` classifies an admitted subject.
+> Existing deployments must import and verify their legacy lists before starting
+> the new server; setting those env variables alone grants no access. Follow
+> [OAuth subject admission](../../docs/oauth-subjects.md).
 
 ### Start the stack
 
@@ -440,10 +441,12 @@ index each time:
 ```bash
 (
 set -e
-docker compose --env-file .env build mcp log-ingester
+docker compose --env-file .env build mcp log-ingester subject-admin
 # 1.25.0+: set OPENBRAIN_AUTH_ROLLUP_PASSWORD in .env and create/rotate the
 # dedicated role before 02-observability.sql grants to it.
 bash ../../scripts/upgrade-enable-auth-rollup-role.sh .
+# Set a distinct OPENBRAIN_TOKEN_ADMIN_PASSWORD in THIS directory's .env first.
+COMPOSE_DIR="$PWD" bash ../../scripts/upgrade-enable-token-admin-role.sh
 docker compose --env-file .env stop mcp
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/02-observability.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/04-sessions.sql
@@ -455,7 +458,15 @@ docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postg
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/10-thought-mutations.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/11-session-update-grants.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/12-auth-audit-grants.sql
+docker compose --env-file .env exec -T postgres psql -X --single-transaction -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/13-oauth-subjects.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/03-grants-assertion.sql
+# First upgrade to database admission: import while MCP is still stopped.
+docker compose --env-file .env --profile tools run --rm subject-admin import-env --json
+docker compose --env-file .env --profile tools run --rm subject-admin list --json
+# Compare every subject/kind with the intended inventory, including revoked rows.
+# Remove both legacy subject variables from .env after successful verification.
+read -r -p 'Inventory verified and legacy env lists removed? Type verified: ' admission_review
+test "$admission_review" = verified
 docker compose --env-file .env up -d
 )
 ```
@@ -484,12 +495,17 @@ columns (the grants assertion now rejects the old table-wide grant); the
 server's boot probe refuses to start without it. See
 [Memory spaces](../../docs/spaces.md#correcting-and-moving-thoughts).
 
-Upgrading to **1.20.0+**: `02-observability.sql` in the block above now also
+The block includes the **first transition to database admission**. On later
+upgrades, once the legacy lists are removed, omit only `import-env`; still run
+`list --json` and verify the inventory before the roll. A skipped import means
+rows already exist, including possibly revoked rows; it does not prove that
+every intended subject was migrated. Leave MCP stopped if verification fails.
+
+The **1.20.0 audit migration**: `02-observability.sql` in the block above also
 converges `mcp_auth_events` to the allowed+denied audit shape in place (the new
-server's boot probe refuses the old denied-only shape, so don't skip it), and
-the OAuth door additionally requires `OAUTH_ALLOWED_SUBJECTS` in `.env`
-**before** the `up -d` — it fails closed, so rolling without it rejects every
-Bearer token. See §"OAuth provider setup" above.
+server's boot probe refuses the old denied-only shape, so don't skip it).
+Release 1.20 used an environment allowlist; current upgrades instead require
+migration 13 and verified admission rows **before** `up -d`, as shown above.
 
 `05-hybrid-search.sql` backfills a stored text-search column under an
 access-exclusive lock that is held through both regular GIN index builds until
@@ -519,7 +535,9 @@ for audit queries and optional Pushover/ntfy configuration.
 `08-access-tokens.sql` is required by the server catalog probe, but the public
 Pattern B override pins `ENABLE_NATIVE_TOKENS=false` and clears the static key,
 so every `x-brain-key` remains rejected. Its dedicated administrator role may
-remain `NOLOGIN` on this OAuth-only deployment. See
+remain `NOLOGIN` only when no credential administration is needed. The current
+OAuth admission lifecycle uses this same administrator and needs its provisioned
+login even though native-token HTTP authentication remains disabled. See
 [Native access tokens](../../docs/native-access-tokens.md#existing-database-upgrade).
 
 The two old role-upgrade helper names remain only as fail-closed tombstones.
@@ -533,7 +551,8 @@ For an MCP code-only rollout with no schema or edge change, run:
 
 ```bash
 docker compose --env-file .env build mcp && \
-  docker compose --env-file .env up -d --no-deps mcp
+  # If OAuth is enabled, complete docs/oauth-subjects.md import/enrollment first.
+docker compose --env-file .env up -d --no-deps mcp
 ```
 
 This recreates the MCP container without restarting Postgres, Ollama, Caddy, or
@@ -552,7 +571,7 @@ A non-zero exit means a completed-catalog invariant failed. Prefer a targeted
 fix (e.g. `REVOKE DELETE ON public.thoughts FROM openbrain_app;`). To re-sync
 wholesale on 1.25.0+, provision `openbrain_auth_rollup` first with the helper
 used in the upgrade block above, then re-apply `01-schema.sql` →
-`02-observability.sql`, apply pending numbered migrations `04` through `12`, and
+`02-observability.sql`, apply pending numbered migrations `04` through `13`, and
 run `03-grants-assertion.sql` **last** — never `01` alone, since its REVOKE-all
 block strips observability grants until `02` restores them.
 
@@ -567,5 +586,17 @@ This OAuth-only deployment has no `MCP_ACCESS_KEY` to rotate. Rotate interactive
 client secrets in the provider and re-paste them into the hosted connector.
 Rotate each M2M secret in the provider and the corresponding agent secret store,
 verify the new credential, then revoke the old one; nothing in this stack stores
-either secret. Already-issued JWTs remain valid until expiration because the
-server performs local verification rather than introspection.
+either secret. Secret rotation alone leaves already-issued JWTs usable until
+expiration. Use `subject-admin revoke` for immediate subject-wide rejection on
+the next request; individual JWTs have no per-token introspection/revocation.
+
+## Database-backed OAuth admission
+
+Before starting the current server, apply migration 13 and import or explicitly
+enroll existing OAuth subjects with the tools-profile `subject-admin` CLI.
+Follow [OAuth subject admission](../../docs/oauth-subjects.md) for the complete
+transactional upgrade, dedicated administrator setup, verification and rollback.
+Legacy `OAUTH_ALLOWED_SUBJECTS` / `OAUTH_SERVICE_ACCOUNT_SUBJECTS` values are
+transition inputs only; they no longer authorize or classify requests. After
+import, remove them from the deployment environment. Enrollment and revocation
+then apply on the next request without restarting the server.

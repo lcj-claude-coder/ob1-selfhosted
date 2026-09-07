@@ -1,3 +1,4 @@
+import { makeSubjectLookup } from "./api_test_support.ts";
 // End-to-end browserless proof: the tracked operator helper exchanges
 // client_credentials against a local OAuth fixture, then authenticates an MCP
 // initialize request through the real requireAuth verifier and MCP factory. It
@@ -100,7 +101,11 @@ async function runHeadlessIntegrationTest(): Promise<void> {
       claims: { sub: SUBJECT, gty: "client-credentials" },
     });
 
-    const { requireAuth } = await import("./auth.ts");
+    const { createRequireAuth } = await import("./auth.ts");
+    const requireAuth = createRequireAuth(
+      null,
+      makeSubjectLookup(TEST_ENV.OAUTH_ALLOWED_SUBJECTS),
+    );
     const { createMcpServer } = await import("./mcp-server.ts");
     const { createApiRouter } = await import("./api.ts");
     const pool = asPool(
@@ -160,7 +165,7 @@ async function runHeadlessIntegrationTest(): Promise<void> {
     assertEquals(success.code, 0, success.stderr);
     assertStringIncludes(
       success.stdout,
-      "OK: browserless client_credentials authenticated to open-brain-homelab 1.25.0",
+      "OK: browserless client_credentials authenticated to open-brain-homelab 1.26.0",
     );
     assertStringIncludes(
       success.stdout,
@@ -174,7 +179,7 @@ async function runHeadlessIntegrationTest(): Promise<void> {
     assertEquals(mcpRequests, 1);
 
     // ---- Bootstrap-401 path: a valid tenant token whose subject is NOT in
-    // OAUTH_ALLOWED_SUBJECTS. This is the enrollment loop the helper's
+    // the admission fixture. This is the enrollment loop the helper's
     // pre-flight subject print exists for: the run must FAIL (fail-closed
     // admission), yet with the opt-in flag it must still emit the locally
     // decoded subject the operator needs to enroll — and without the flag
@@ -198,7 +203,8 @@ async function runHeadlessIntegrationTest(): Promise<void> {
       `Token subject (locally decoded): ${OUTSIDER_SUBJECT}`,
     );
     assertStringIncludes(bootstrap.stderr, "HTTP 401");
-    assertStringIncludes(bootstrap.stderr, "OAUTH_ALLOWED_SUBJECTS");
+    assertStringIncludes(bootstrap.stderr, "subject-admin allow");
+    assertStringIncludes(bootstrap.stderr, "without restarting the server");
     // The hint must hedge: this 401 could equally be a token-validation
     // failure, so it names both audit outcomes rather than asserting the
     // subject_not_allowed row exists.
@@ -223,7 +229,7 @@ async function runHeadlessIntegrationTest(): Promise<void> {
     // Drive a real REST handler far enough to turn the middleware-populated
     // service context into a service-layer argument. This pins api.ts's
     // defensive gate instead of proving only the middleware classifier.
-    const api = createApiRouter(pool, makeDeps());
+    const api = createApiRouter(pool, makeDeps(), requireAuth);
     const restResponse = await api.request("/thoughts/stats", {
       headers: { authorization: `Bearer ${admittedToken}` },
     });

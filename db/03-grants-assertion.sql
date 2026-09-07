@@ -844,7 +844,8 @@ $$ LANGUAGE plpgsql;
 
 -- Native access-token invariants. The runtime may perform only the bounded
 -- hash lookup; the dedicated administrator may list non-secret metadata and
--- execute exactly two fixed-search-path SECURITY DEFINER lifecycle functions.
+-- execute two fixed-search-path native lifecycle functions plus the OAuth
+-- functions asserted below.
 -- Neither role may inherit privileges, and PUBLIC receives nothing.
 DO $$
 DECLARE
@@ -942,7 +943,7 @@ BEGIN
     JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
     WHERE namespace.nspname <> 'information_schema'
       AND namespace.nspname !~ '^pg_'
-      AND relation.oid <> token_table
+      AND relation.oid <> ALL (ARRAY[token_table, to_regclass('oauth_auth.allowed_subject')])
       AND (
         relation.relkind IN ('r', 'p', 'v', 'm', 'f')
         AND (
@@ -962,7 +963,7 @@ BEGIN
   ) exposed;
   IF bad IS NOT NULL THEN
     RAISE EXCEPTION
-      'grants assertion failed: openbrain_token_admin can access non-token relations: %.',
+      'grants assertion failed: openbrain_token_admin can access non-authentication relations: %.',
       bad;
   END IF;
 
@@ -983,7 +984,10 @@ BEGIN
   WHERE namespace.nspname <> 'information_schema'
     AND namespace.nspname !~ '^pg_'
     AND routine.prosecdef
-    AND routine.oid <> ALL (ARRAY[register_fn, revoke_fn])
+    AND routine.oid <> ALL (ARRAY[register_fn, revoke_fn,
+      to_regprocedure('oauth_auth.allow_subject(text,text,text)'),
+      to_regprocedure('oauth_auth.revoke_subject(text)'),
+      to_regprocedure('oauth_auth.import_subjects(text[],text[])')])
     AND has_function_privilege(admin_oid, routine.oid, 'EXECUTE');
   IF bad IS NOT NULL THEN
     RAISE EXCEPTION
@@ -1415,5 +1419,117 @@ BEGIN
       'Postgres separately before restoring service.',
       bad_hba;
   END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- OAuth admission shares the credential administrator, never its authority
+-- with the MCP role. The native-auth block above scans effective access to
+-- unrelated relations and definer functions for the shared admin role.
+DO $$
+DECLARE
+  subject_table oid := to_regclass('oauth_auth.allowed_subject');
+  app_oid oid := to_regrole('openbrain_app');
+  admin_oid oid := to_regrole('openbrain_token_admin');
+  backup_oid oid := to_regrole('openbrain_readonly');
+  functions oid[] := ARRAY[
+    to_regprocedure('oauth_auth.allow_subject(text,text,text)'),
+    to_regprocedure('oauth_auth.revoke_subject(text)'),
+    to_regprocedure('oauth_auth.import_subjects(text[],text[])')
+  ];
+  routine oid;
+  relation_owner oid;
+  column_name text;
+  role_oid oid;
+BEGIN
+  IF subject_table IS NULL OR array_position(functions, NULL) IS NOT NULL THEN
+    RAISE EXCEPTION 'grants assertion failed: OAuth admission schema missing; apply db/13-oauth-subjects.sql.';
+  END IF;
+  SELECT relowner INTO relation_owner FROM pg_class WHERE oid = subject_table;
+  IF relation_owner = ANY(ARRAY[app_oid, admin_oid, backup_oid]) OR EXISTS (
+    SELECT 1 FROM pg_namespace WHERE oid = 'oauth_auth'::regnamespace
+      AND nspowner = ANY(ARRAY[app_oid, admin_oid, backup_oid])
+  ) THEN
+    RAISE EXCEPTION 'grants assertion failed: runtime/admin/backup must not own OAuth admission.';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_namespace n
+    CROSS JOIN LATERAL aclexplode(COALESCE(n.nspacl, acldefault('n', n.nspowner))) acl
+    WHERE n.oid = 'oauth_auth'::regnamespace AND acl.grantee = 0
+  ) OR EXISTS (
+    SELECT 1 FROM pg_class c
+    CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) acl
+    WHERE c.oid = subject_table AND acl.grantee = 0
+  ) OR EXISTS (
+    SELECT 1 FROM pg_attribute a CROSS JOIN LATERAL aclexplode(a.attacl) acl
+    WHERE a.attrelid = subject_table AND acl.grantee = 0
+  ) THEN
+    RAISE EXCEPTION 'grants assertion failed: PUBLIC can access OAuth admission.';
+  END IF;
+  FOREACH role_oid IN ARRAY ARRAY[app_oid, admin_oid] LOOP
+    IF NOT has_schema_privilege(role_oid, 'oauth_auth', 'USAGE')
+       OR has_schema_privilege(role_oid, 'oauth_auth', 'CREATE')
+       OR has_table_privilege(role_oid, subject_table,
+         'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+       OR has_any_column_privilege(role_oid, subject_table, 'INSERT, UPDATE, REFERENCES') THEN
+      RAISE EXCEPTION 'grants assertion failed: OAuth runtime/admin must be read-only outside the admin functions.';
+    END IF;
+    FOR column_name IN SELECT attname FROM pg_attribute
+      WHERE attrelid = subject_table AND attnum > 0 AND NOT attisdropped LOOP
+      IF has_column_privilege(role_oid, subject_table, column_name, 'SELECT')
+        IS DISTINCT FROM (column_name = ANY(CASE WHEN role_oid = app_oid
+          THEN ARRAY['subject', 'kind', 'revoked_at']
+          ELSE ARRAY['subject', 'label', 'kind', 'created_at', 'revoked_at'] END)) THEN
+        RAISE EXCEPTION 'grants assertion failed: unexpected OAuth admission SELECT grant on %.', column_name;
+      END IF;
+    END LOOP;
+  END LOOP;
+  IF NOT has_schema_privilege(backup_oid, 'oauth_auth', 'USAGE')
+     OR has_schema_privilege(backup_oid, 'oauth_auth', 'CREATE')
+     OR NOT has_table_privilege(backup_oid, subject_table, 'SELECT')
+     OR has_table_privilege(backup_oid, subject_table,
+       'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+     OR has_any_column_privilege(backup_oid, subject_table,
+       'INSERT, UPDATE, REFERENCES') THEN
+    RAISE EXCEPTION 'grants assertion failed: backup cannot safely dump OAuth admission.';
+  END IF;
+  -- Even unrelated CREATE authority lets an administrator install definer
+  -- wrappers or poison future objects. No persistent object creation is needed.
+  IF has_database_privilege(admin_oid, current_database(), 'CREATE') OR EXISTS (
+    SELECT 1 FROM pg_namespace n WHERE n.nspname <> 'information_schema'
+      AND n.nspname !~ '^pg_' AND has_schema_privilege(admin_oid, n.oid, 'CREATE')
+  ) THEN
+    RAISE EXCEPTION 'grants assertion failed: credential administrator can create persistent objects.';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM (
+      SELECT acl.grantee, acl.is_grantable FROM pg_namespace n
+      CROSS JOIN LATERAL aclexplode(n.nspacl) acl
+      WHERE n.oid = 'oauth_auth'::regnamespace
+      UNION ALL
+      SELECT acl.grantee, acl.is_grantable FROM pg_class c
+      CROSS JOIN LATERAL aclexplode(c.relacl) acl WHERE c.oid = subject_table
+      UNION ALL
+      SELECT acl.grantee, acl.is_grantable FROM pg_attribute a
+      CROSS JOIN LATERAL aclexplode(a.attacl) acl WHERE a.attrelid = subject_table
+    ) grants WHERE grantee = ANY(ARRAY[app_oid, admin_oid]) AND is_grantable
+  ) THEN
+    RAISE EXCEPTION 'grants assertion failed: OAuth admission privileges are delegable.';
+  END IF;
+  FOREACH routine IN ARRAY functions LOOP
+    IF NOT COALESCE((SELECT prosecdef AND proowner = relation_owner
+      AND COALESCE(proconfig, ARRAY[]::text[]) @> ARRAY['search_path=pg_catalog, oauth_auth']
+      FROM pg_proc WHERE oid = routine), false)
+      OR has_function_privilege(app_oid, routine, 'EXECUTE')
+      OR has_function_privilege(backup_oid, routine, 'EXECUTE')
+      OR NOT has_function_privilege(admin_oid, routine, 'EXECUTE')
+      OR EXISTS (
+        SELECT 1 FROM pg_proc p
+        CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) acl
+        WHERE p.oid = routine AND (acl.grantee <> ALL(ARRAY[relation_owner, admin_oid]) OR
+          (acl.grantee = admin_oid AND acl.is_grantable))
+      ) THEN
+      RAISE EXCEPTION 'grants assertion failed: OAuth admission function % is not confined to the credential administrator.', routine::regprocedure;
+    END IF;
+  END LOOP;
 END;
 $$ LANGUAGE plpgsql;

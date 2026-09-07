@@ -36,13 +36,16 @@ export function isAuthDoor(value: unknown): value is AuthDoor {
 export function isOAuthSubject(value: unknown): value is string {
   if (
     typeof value !== "string" || value.length === 0 ||
-    value.length > MAX_OAUTH_SUBJECT_LENGTH
+    value.length > MAX_OAUTH_SUBJECT_LENGTH || value.trim() !== value
   ) {
     return false;
   }
   for (const character of value) {
     const codePoint = character.codePointAt(0)!;
-    if (codePoint <= 0x1f || codePoint === 0x7f) return false;
+    if (
+      codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f) ||
+      (codePoint >= 0xd800 && codePoint <= 0xdfff)
+    ) return false;
   }
   return true;
 }

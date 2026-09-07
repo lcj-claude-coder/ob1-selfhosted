@@ -721,6 +721,35 @@ export async function probeDbAtBoot(
             `column grant before starting this server version.`,
         );
       }
+      const oauthSchema = await client.queryArray<[boolean]>(
+        `SELECT to_regclass('oauth_auth.allowed_subject') IS NOT NULL
+          AND to_regprocedure('oauth_auth.allow_subject(text,text,text)') IS NOT NULL
+          AND to_regprocedure('oauth_auth.revoke_subject(text)') IS NOT NULL
+          AND to_regprocedure('oauth_auth.import_subjects(text[],text[])') IS NOT NULL`,
+      );
+      if (oauthSchema.rows[0]?.[0] !== true) {
+        throw new RequiredSchemaError(
+          `[db] Missing OAuth admission schema. Apply db/13-oauth-subjects.sql, ` +
+            `then run db/03-grants-assertion.sql before starting server 1.26.0. ` +
+            `If OAuth is enabled, also import legacy subjects with subject-admin ` +
+            `import-env or enroll them with subject-admin allow before the roll.`,
+        );
+      }
+      // Check the columns used by admission, even on an empty table. The
+      // active-subject check only needs revoked_at and can otherwise succeed
+      // after SELECT(subject) or SELECT(kind) has drifted away.
+      try {
+        await client.queryArray(
+          `SELECT subject, kind, revoked_at FROM oauth_auth.allowed_subject
+           WHERE false`,
+        );
+      } catch {
+        throw new RequiredSchemaError(
+          `[db] Cannot read required OAuth admission columns. Reapply ` +
+            `db/13-oauth-subjects.sql as the database owner, then run ` +
+            `db/03-grants-assertion.sql before starting server 1.26.0.`,
+        );
+      }
       // Only reference the ledger after to_regclass proved it exists. Putting
       // this EXISTS in the catalog query above would fail at SQL parse time on
       // an old database, bypassing the actionable migration guidance.

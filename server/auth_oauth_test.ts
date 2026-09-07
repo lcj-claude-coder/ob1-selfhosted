@@ -1,3 +1,4 @@
+import { makeSubjectLookup } from "./api_test_support.ts";
 // Tests for the `requireAuth` middleware with BOTH auth doors enabled — OAuth
 // (Bearer) AND the x-brain-key door (a valid compose-local config that opts into
 // OAuth on top of the static key). Covers the full (brain-key × Bearer × OAuth)
@@ -68,8 +69,12 @@ async function runAuthOauthTest(t: Deno.TestContext): Promise<void> {
   // Install before importing auth.ts: createRemoteJWKSet is configured at
   // module load when the OAuth door is enabled.
   const restoreFetch = fixture.installFetchMock();
-  const { requireAuth, PROTECTED_RESOURCE_METADATA_URL } = await import(
+  const { createRequireAuth, PROTECTED_RESOURCE_METADATA_URL } = await import(
     "./auth.ts"
+  );
+  const requireAuth = createRequireAuth(
+    null,
+    makeSubjectLookup(TEST_ENV.OAUTH_ALLOWED_SUBJECTS),
   );
   const app = makeAuthTestApp(requireAuth);
 

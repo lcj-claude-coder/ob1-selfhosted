@@ -91,6 +91,7 @@ services:
       - ../../db/10-thought-mutations.sql:/docker-entrypoint-initdb.d/10-thought-mutations.sql:ro
       - ../../db/11-session-update-grants.sql:/docker-entrypoint-initdb.d/11-session-update-grants.sql:ro
       - ../../db/12-auth-audit-grants.sql:/docker-entrypoint-initdb.d/12-auth-audit-grants.sql:ro
+      - ../../db/13-oauth-subjects.sql:/docker-entrypoint-initdb.d/13-oauth-subjects.sql:ro
       # Keep the stable source filename, but run the catalog assertion last so
       # later/future schemas and topology invariants are covered.
       - ../../db/03-grants-assertion.sql:/docker-entrypoint-initdb.d/99-grants-assertion.sql:ro
@@ -204,14 +205,9 @@ services:
       AUTH0_ISSUER: ${AUTH0_ISSUER:-}
       AUTH0_JWKS_URI: ${AUTH0_JWKS_URI:-}
       AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-}
-      # Required whenever the OAuth door above is enabled: the in-app
-      # authorization allowlist of exact JWT `sub` claims. FAIL-CLOSED — with
-      # OAuth on and this empty, every Bearer token is rejected (the native/
-      # static door above is unaffected). Irrelevant while AUTH0_* are empty.
+      # Transition-release validation/warning only; database rows govern access.
+      # Run subject-admin import-env before first startup, then remove both lists.
       OAUTH_ALLOWED_SUBJECTS: ${OAUTH_ALLOWED_SUBJECTS:-}
-      # Optional exact JWT subjects for service accounts whose issuer does not
-      # emit Auth0's signed gty=client-credentials claim. Attribution only — a
-      # machine subject must ALSO be in OAUTH_ALLOWED_SUBJECTS to be admitted.
       OAUTH_SERVICE_ACCOUNT_SUBJECTS: ${OAUTH_SERVICE_ACCOUNT_SUBJECTS:-}
       # Operator tunables documented in .env.example. Compose only forwards
       # enumerated variables, so each knob must be listed here — otherwise
@@ -262,6 +258,37 @@ services:
       DB_NAME: ${POSTGRES_DB:-openbrain}
       DB_USER: openbrain_token_admin
       DB_PASSWORD: ${OPENBRAIN_TOKEN_ADMIN_PASSWORD:-}
+
+  subject-admin:
+    build:
+      context: ../../server
+    profiles:
+      - tools
+    restart: "no"
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=16M,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint:
+      - deno
+      - run
+      - --allow-net
+      - --allow-env=DB_HOST,DB_PORT,DB_NAME,DB_USER,DB_PASSWORD,PGAPPNAME,PGDATABASE,PGHOST,PGOPTIONS,PGPASSWORD,PGPORT,PGUSER,OAUTH_ALLOWED_SUBJECTS,OAUTH_SERVICE_ACCOUNT_SUBJECTS
+      - /app/subject_admin.ts
+    environment:
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${POSTGRES_DB:-openbrain}
+      DB_USER: openbrain_token_admin
+      DB_PASSWORD: ${OPENBRAIN_TOKEN_ADMIN_PASSWORD:-}
+      OAUTH_ALLOWED_SUBJECTS: ${OAUTH_ALLOWED_SUBJECTS:-}
+      OAUTH_SERVICE_ACCOUNT_SUBJECTS: ${OAUTH_SERVICE_ACCOUNT_SUBJECTS:-}
 
   caddy:
     # Derived from caddy:2-alpine — strips the cap_net_bind_service=ep file

@@ -96,6 +96,8 @@ run_preflight() {
     deno run --config server/deno.json --frozen \
       --allow-read=.github/workflows/db-init.yml \
       scripts/ci/check_db_init_paths.ts
+  run_family "credential administrator upgrade helper" \
+    bash scripts/ci/token_admin_upgrade_helper_test.sh
   run_family "auth-rollup role upgrade helper" \
     bash scripts/ci/auth_rollup_upgrade_helper_test.sh
   run_family "Funnel monitor" bash scripts/funnel_monitor_test.sh
@@ -149,6 +151,7 @@ start_database() {
     -v "$GITHUB_WORKSPACE/db/10-thought-mutations.sql:/docker-entrypoint-initdb.d/10-thought-mutations.sql:ro" \
     -v "$GITHUB_WORKSPACE/db/11-session-update-grants.sql:/docker-entrypoint-initdb.d/11-session-update-grants.sql:ro" \
     -v "$GITHUB_WORKSPACE/db/12-auth-audit-grants.sql:/docker-entrypoint-initdb.d/12-auth-audit-grants.sql:ro" \
+    -v "$GITHUB_WORKSPACE/db/13-oauth-subjects.sql:/docker-entrypoint-initdb.d/13-oauth-subjects.sql:ro" \
     -v "$GITHUB_WORKSPACE/db/03-grants-assertion.sql:/docker-entrypoint-initdb.d/99-grants-assertion.sql:ro" \
     "$image" >/dev/null; then
     # Docker may create the named container before failing to bind its port.
@@ -183,6 +186,7 @@ run_schema() {
   run_family "schema/data contracts" bash scripts/ci/db_init_schema_smoke.sh data
 }
 run_auth() {
+  run_family "OAuth subject admission" bash scripts/ci/db_init_auth_smoke.sh subjects
   run_family "native-token auth" bash scripts/ci/db_init_auth_smoke.sh tokens
   run_family "auth audit and upgrade" bash scripts/ci/db_init_auth_smoke.sh audit
 }

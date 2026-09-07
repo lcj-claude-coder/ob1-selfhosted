@@ -38,6 +38,90 @@ expect_rejected() {
 # after 02-observability.sql.
 run_assertion >/dev/null
 
+# Table SELECT alone is insufficient for a backup: schema USAGE is also
+# required. Prove the actual dump fails on drift and recovers after migration.
+dump_oauth_as_backup() {
+  docker exec -e PGPASSWORD="$OPENBRAIN_READONLY_PASSWORD" "$DB_INIT_CONTAINER" \
+    pg_dump -w -h 127.0.0.1 -U openbrain_readonly -d "$POSTGRES_DB" \
+    --schema=oauth_auth -Fc > /dev/null
+}
+dump_oauth_as_backup
+super_psql -v ON_ERROR_STOP=1 -c \
+  "REVOKE USAGE ON SCHEMA oauth_auth FROM openbrain_readonly" >/dev/null
+test "$(super_psql -tAc \
+  "SELECT has_table_privilege('openbrain_readonly', 'oauth_auth.allowed_subject', 'SELECT')")" = t
+if dump_output=$(dump_oauth_as_backup 2>&1); then
+  echo "::error::OAuth backup dump unexpectedly succeeded without schema USAGE"
+  exit 1
+fi
+grep -Fq 'permission denied for schema oauth_auth' <<< "$dump_output"
+expect_rejected "OAuth backup schema USAGE drift" "backup cannot safely dump OAuth admission"
+apply_sql db/13-oauth-subjects.sql >/dev/null
+run_assertion >/dev/null
+dump_oauth_as_backup
+
+# Backups cannot create objects or own the schema. Ownership retains DROP
+# authority even after its owner revokes its own CREATE privilege.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT CREATE ON SCHEMA oauth_auth TO openbrain_readonly" >/dev/null
+expect_rejected "OAuth backup schema CREATE drift" "backup cannot safely dump OAuth admission"
+apply_sql db/13-oauth-subjects.sql >/dev/null
+run_assertion >/dev/null
+for role in openbrain_app openbrain_token_admin openbrain_readonly; do
+  super_psql -v ON_ERROR_STOP=1 -c \
+    "ALTER SCHEMA oauth_auth OWNER TO $role;
+     REVOKE CREATE ON SCHEMA oauth_auth FROM $role" >/dev/null
+  test "$(super_psql -tAc \
+    "SELECT has_schema_privilege('$role', 'oauth_auth', 'CREATE')")" = f
+  expect_rejected "OAuth schema ownership by $role without CREATE" \
+    "runtime/admin/backup must not own OAuth admission"
+  # Demonstrate the owner-only destructive authority in a rolled-back fixture.
+  super_psql -v ON_ERROR_STOP=1 -c \
+    "BEGIN; SET LOCAL ROLE $role; DROP SCHEMA oauth_auth CASCADE; ROLLBACK" >/dev/null
+  super_psql -v ON_ERROR_STOP=1 -c \
+    "ALTER SCHEMA oauth_auth OWNER TO postgres" >/dev/null
+  apply_sql db/13-oauth-subjects.sql >/dev/null
+  run_assertion >/dev/null
+done
+dump_oauth_as_backup
+
+# Backups must neither resurrect a revoked subject nor wipe admission state.
+# Table-level checks alone miss column-only UPDATE/INSERT/REFERENCES grants.
+for privilege in INSERT UPDATE DELETE TRUNCATE REFERENCES TRIGGER \
+    'UPDATE(revoked_at)' 'INSERT(subject)' 'REFERENCES(subject)'; do
+  super_psql -v ON_ERROR_STOP=1 -c \
+    "GRANT $privilege ON oauth_auth.allowed_subject TO openbrain_readonly" >/dev/null
+  expect_rejected "OAuth backup $privilege drift" "backup cannot safely dump OAuth admission"
+  apply_sql db/13-oauth-subjects.sql >/dev/null
+  run_assertion >/dev/null
+done
+
+# OAuth admission: reject widened reads, direct mutation, delegable grants and
+# PUBLIC definer access, then prove the migration reconciles direct ACL drift.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT UPDATE(kind) ON oauth_auth.allowed_subject TO openbrain_app" >/dev/null
+expect_rejected "OAuth runtime mutation" "OAuth runtime/admin must be read-only"
+apply_sql db/13-oauth-subjects.sql >/dev/null
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT SELECT(created_at) ON oauth_auth.allowed_subject TO openbrain_app" >/dev/null
+expect_rejected "OAuth runtime inventory widening" "unexpected OAuth admission SELECT"
+apply_sql db/13-oauth-subjects.sql >/dev/null
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT SELECT(label) ON oauth_auth.allowed_subject TO openbrain_app" >/dev/null
+expect_rejected "OAuth runtime label widening" "unexpected OAuth admission SELECT"
+apply_sql db/13-oauth-subjects.sql >/dev/null
+test "$(super_psql -tAc \
+  "SELECT has_column_privilege('openbrain_app', 'oauth_auth.allowed_subject', 'label', 'SELECT')")" = f
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT EXECUTE ON FUNCTION oauth_auth.allow_subject(text,text,text) TO PUBLIC" >/dev/null
+expect_rejected "OAuth PUBLIC enrollment" "grants assertion failed"
+apply_sql db/13-oauth-subjects.sql >/dev/null
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT SELECT(subject) ON oauth_auth.allowed_subject TO openbrain_token_admin WITH GRANT OPTION" >/dev/null
+expect_rejected "OAuth delegable admission" "OAuth admission privileges are delegable"
+apply_sql db/13-oauth-subjects.sql >/dev/null
+run_assertion >/dev/null
+
 # Auth-event writes and retention use separate credentials. Match the ticket's
 # SET ROLE acceptance probe directly, then prove the rollup can delete a row
 # without gaining INSERT/UPDATE or sideways corpus access.

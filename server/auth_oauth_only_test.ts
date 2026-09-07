@@ -1,3 +1,4 @@
+import { makeSubjectLookup } from "./api_test_support.ts";
 // Tests for the `requireAuth` middleware with ONLY the OAuth door enabled —
 // MCP_ACCESS_KEY unset, so the x-brain-key door is OFF. This is the
 // compose-tailnet (funnel) + qubes deployment posture: a single OAuth auth path,
@@ -46,7 +47,11 @@ async function runOauthOnlyTest(t: Deno.TestContext): Promise<void> {
     jwksUrl: JWKS_URL,
   });
   const restoreFetch = fixture.installFetchMock();
-  const { requireAuth } = await import("./auth.ts");
+  const { createRequireAuth } = await import("./auth.ts");
+  const requireAuth = createRequireAuth(
+    null,
+    makeSubjectLookup(TEST_ENV.OAUTH_ALLOWED_SUBJECTS),
+  );
   const app = makeAuthTestApp(requireAuth);
 
   try {

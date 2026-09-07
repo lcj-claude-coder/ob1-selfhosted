@@ -1,57 +1,55 @@
 #!/bin/bash
-# Provision or rotate the dedicated native-token administrator on an existing
-# compose database. Fresh databases do this in db/00-roles.sh; init scripts do
-# not rerun on an existing volume.
-
+# Provision/rotate the shared credential administrator. Run from the trusted
+# operator compartment, never the MCP container. --direct uses native psql over
+# the configured DB_HOST/DB_PORT (including the Qubes ConnectTCP forwarder).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_DIR="${COMPOSE_DIR:-$(cd "$SCRIPT_DIR/../deploy/compose-local" && pwd)}"
-
+mode="${1:-compose}"
+case "$mode" in
+  compose|--direct) ;;
+  *) echo "usage: COMPOSE_DIR=deployment-dir $0 [--direct]" >&2; exit 2;;
+esac
+[[ $# -le 1 ]] || { echo "unexpected argument" >&2; exit 2; }
 cd "$COMPOSE_DIR"
-
-if [[ ! -f .env ]]; then
-  echo "[upgrade-token-admin] .env not found in $(pwd)" >&2
-  exit 1
-fi
-
-# Keep the explicit file for the same uniform invocation used by Pattern B.
-# These `ps`/`exec` calls do not interpolate service variables; the sourced
-# COMPOSE_FILE + COMPOSE_PROJECT_NAME values select the running project.
-compose_cmd=(docker compose --env-file .env)
-
+[[ -f .env ]] || { echo "[upgrade-token-admin] .env not found" >&2; exit 1; }
 set -a
 # shellcheck disable=SC1091
 . .env
 set +a
+: "${OPENBRAIN_TOKEN_ADMIN_PASSWORD:?set OPENBRAIN_TOKEN_ADMIN_PASSWORD in .env first}"
 
-: "${OPENBRAIN_TOKEN_ADMIN_PASSWORD:?set OPENBRAIN_TOKEN_ADMIN_PASSWORD in .env before running this upgrade}"
-
-if ! "${compose_cmd[@]}" ps --status=running postgres | grep -q postgres; then
-  echo "[upgrade-token-admin] postgres container not running; aborting" >&2
-  exit 1
-fi
-
-existing="$("${compose_cmd[@]}" exec -T postgres \
-  psql -tA -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-openbrain}" \
-  -c "SELECT 1 FROM pg_roles WHERE rolname='openbrain_token_admin'" \
-  | tr -d '[:space:]')"
-
-if [[ -n "$existing" ]]; then
-  action="enabled LOGIN and reconciled its password and privilege flags"
-  sql="ALTER ROLE openbrain_token_admin WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'token_admin_password';"
+if [[ "$mode" == "--direct" ]]; then
+  : "${DB_HOST:?set DB_HOST to the database/ConnectTCP forwarder}"
+  : "${POSTGRES_PASSWORD:?set the migration credential POSTGRES_PASSWORD}"
+  export PGPASSWORD="$POSTGRES_PASSWORD"
+  psql_cmd=(psql -X -h "$DB_HOST" -p "${DB_PORT:-5432}"
+    -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-openbrain}")
 else
-  action="created the LOGIN role"
-  sql="CREATE ROLE openbrain_token_admin LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'token_admin_password';"
+  compose_cmd=(docker compose --env-file .env)
+  if ! "${compose_cmd[@]}" ps --status=running postgres | grep -q postgres; then
+    echo "[upgrade-token-admin] no running postgres service; use --direct for an external database" >&2
+    exit 1
+  fi
+  # Pass the environment NAME only, never the password in docker/psql argv.
+  psql_cmd=("${compose_cmd[@]}" exec -T -e OPENBRAIN_TOKEN_ADMIN_PASSWORD postgres
+    psql -X -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-openbrain}")
 fi
 
-"${compose_cmd[@]}" exec -T postgres \
-  psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-postgres}" \
-  -d "${POSTGRES_DB:-openbrain}" \
-  --set=token_admin_password="$OPENBRAIN_TOKEN_ADMIN_PASSWORD" \
-  <<EOSQL
-$sql
-EOSQL
+# PostgreSQL reads the password from its process environment. Literal quoting
+# is done by psql, not shell interpolation. --quiet suppresses command tags;
+# errors do not include the generated password statement (ON_ERROR_STOP only).
+"${psql_cmd[@]}" -q -v ON_ERROR_STOP=1 <<'SQL'
+\getenv token_admin_password OPENBRAIN_TOKEN_ADMIN_PASSWORD
+BEGIN;
+SELECT 'CREATE ROLE openbrain_token_admin NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS'
+WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='openbrain_token_admin')
+\gexec
+ALTER ROLE openbrain_token_admin WITH LOGIN NOSUPERUSER NOCREATEDB
+  NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'token_admin_password';
+COMMIT;
+SQL
 
-echo "[upgrade-token-admin] $action"
-echo "[upgrade-token-admin] next: apply db/08-access-tokens.sql, then db/03-grants-assertion.sql"
+echo "[upgrade-token-admin] LOGIN, password and restricted privilege flags reconciled"
+echo "[upgrade-token-admin] apply migrations 08 and 13 plus the final grants assertion; install the role-scoped HBA entries on a split database"

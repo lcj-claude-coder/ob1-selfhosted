@@ -276,13 +276,13 @@ automatically when those claims are present), nothing else:
    membership, not string equality);
 4. **Expiry** — `exp` must be present and valid (RFC 7519 makes it optional; the
    resource server must demand it);
-5. **Subject** — `sub` must be present and a bounded string free of ASCII
-   control characters;
+5. **Subject** — `sub` must be present and a bounded string without leading or
+   trailing whitespace, C0/C1 control characters, DEL, or unpaired surrogates;
 6. **Authorization** — the verified `sub` must appear on the
-   `OAUTH_ALLOWED_SUBJECTS` allowlist. This list **fails closed**: with the
-   OAuth door enabled and the list unset or empty, every Bearer token is
-   rejected and the boot log warns. An IdP-side misconfiguration therefore stops
-   here instead of equaling full access.
+   `oauth_auth.allowed_subject` table as an active row. This list **fails
+   closed**: with the OAuth door enabled and no active admitted subjects, every
+   Bearer token is rejected and the boot log warns. An IdP-side misconfiguration
+   therefore stops here instead of equaling full access.
 
 Every rejection — including an allowlist miss — returns the same uniform 401,
 and every decision (admitted or refused) **enqueues** an audit row for the
@@ -321,8 +321,10 @@ allowlist are two different layers, and you want both.**
 - The app layer is what makes a single dashboard toggle survivable. Tenant
   configuration is mutable, invisible to your repo, outside your change control,
   and — as the social-connection row shows — easy to hold a wrong mental model
-  about. A fail-closed allowlist in code you version-control turns "the tenant
-  is misconfigured" from a breach into a log line.
+  about. The version-controlled verifier checks the operator-managed
+  `oauth_auth.allowed_subject` table on every request. This fail-closed
+  admission check turns "the tenant is misconfigured" into a denied request with
+  a best-effort audit event.
 
 Two smaller dashboard truths, same spirit, worth internalizing on the way out:
 

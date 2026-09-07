@@ -65,7 +65,8 @@ export type DeploymentCapability =
   | "log-sink"
   | "mcp-server"
   | "pattern-b-edge"
-  | "token-admin";
+  | "token-admin"
+  | "subject-admin";
 
 export interface ServiceCapabilityContract {
   service: string;
@@ -78,6 +79,7 @@ export interface ServiceCapabilityContract {
 export const SERVICE_CAPABILITY_CONTRACTS = {
   "log-sink": { service: "log-sink" },
   "token-admin": { service: "token-admin" },
+  "subject-admin": { service: "subject-admin" },
 } as const satisfies Readonly<
   Partial<Record<DeploymentCapability, ServiceCapabilityContract>>
 >;
@@ -202,7 +204,7 @@ export const DOCUMENTED_DEPLOYMENTS: readonly DeploymentShape[] = [
     name: "compose-local",
     exampleGroup: "compose-local",
     files: ["local"],
-    capabilities: ["mcp-server", "token-admin"],
+    capabilities: ["mcp-server", "token-admin", "subject-admin"],
     server: {
       kind: "present",
       policy: { expressionPins: LOCAL_EXPRESSION_PINS },
@@ -216,6 +218,7 @@ export const DOCUMENTED_DEPLOYMENTS: readonly DeploymentShape[] = [
     capabilities: [
       "mcp-server",
       "token-admin",
+      "subject-admin",
       "pattern-b-edge",
       "log-sink",
     ],
@@ -231,7 +234,12 @@ export const DOCUMENTED_DEPLOYMENTS: readonly DeploymentShape[] = [
     name: "compose-external-db-overlay",
     exampleGroup: "compose-local",
     files: ["local", "externalDb"],
-    capabilities: ["mcp-server", "token-admin", "external-corpus"],
+    capabilities: [
+      "mcp-server",
+      "token-admin",
+      "subject-admin",
+      "external-corpus",
+    ],
     server: {
       kind: "present",
       policy: { expressionDifferences: EXTERNAL_DB_DIFFERENCE },
@@ -244,6 +252,7 @@ export const DOCUMENTED_DEPLOYMENTS: readonly DeploymentShape[] = [
     capabilities: [
       "mcp-server",
       "token-admin",
+      "subject-admin",
       "external-corpus",
       "cpu-ollama",
     ],
@@ -260,6 +269,7 @@ export const DOCUMENTED_DEPLOYMENTS: readonly DeploymentShape[] = [
     capabilities: [
       "mcp-server",
       "token-admin",
+      "subject-admin",
       "pattern-b-edge",
       "log-sink",
       "external-corpus",
@@ -283,6 +293,7 @@ export const DOCUMENTED_DEPLOYMENTS: readonly DeploymentShape[] = [
     capabilities: [
       "mcp-server",
       "token-admin",
+      "subject-admin",
       "pattern-b-edge",
       "log-sink",
       "external-corpus",
@@ -303,7 +314,13 @@ export const DOCUMENTED_DEPLOYMENTS: readonly DeploymentShape[] = [
     name: "qubes-app",
     exampleGroup: "qubes-app",
     files: ["qubesApp"],
-    capabilities: ["mcp-server", "external-corpus", "cpu-ollama"],
+    capabilities: [
+      "mcp-server",
+      "external-corpus",
+      "cpu-ollama",
+      "token-admin",
+      "subject-admin",
+    ],
     server: {
       kind: "present",
       policy: {

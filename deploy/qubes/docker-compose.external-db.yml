@@ -74,3 +74,8 @@ services:
     depends_on: !reset null
     environment:
       DB_HOST: ${DB_HOST:?set DB_HOST to the external Postgres address (Qubes split — this qube own-IP ConnectTCP db forwarder) when layering the external-db override}
+
+  subject-admin:
+    depends_on: !reset null
+    environment:
+      DB_HOST: ${DB_HOST:?set DB_HOST to the external Postgres address (Qubes split — this qube own-IP ConnectTCP db forwarder) when layering the external-db override}
