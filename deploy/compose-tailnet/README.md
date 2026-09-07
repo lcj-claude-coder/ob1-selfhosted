@@ -455,6 +455,7 @@ docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postg
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/10-thought-mutations.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/11-session-update-grants.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/12-auth-audit-grants.sql
+docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/13-oauth-subjects.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/03-grants-assertion.sql
 docker compose --env-file .env up -d
 )
@@ -533,7 +534,8 @@ For an MCP code-only rollout with no schema or edge change, run:
 
 ```bash
 docker compose --env-file .env build mcp && \
-  docker compose --env-file .env up -d --no-deps mcp
+  # If OAuth is enabled, complete docs/oauth-subjects.md import/enrollment first.
+docker compose --env-file .env up -d --no-deps mcp
 ```
 
 This recreates the MCP container without restarting Postgres, Ollama, Caddy, or
@@ -569,3 +571,14 @@ Rotate each M2M secret in the provider and the corresponding agent secret store,
 verify the new credential, then revoke the old one; nothing in this stack stores
 either secret. Already-issued JWTs remain valid until expiration because the
 server performs local verification rather than introspection.
+
+## Database-backed OAuth admission
+
+Before starting the current server, apply migration 13 and import or explicitly
+enroll existing OAuth subjects with the tools-profile `subject-admin` CLI.
+Follow [OAuth subject admission](../../docs/oauth-subjects.md) for the complete
+transactional upgrade, dedicated administrator setup, verification and rollback.
+Legacy `OAUTH_ALLOWED_SUBJECTS` / `OAUTH_SERVICE_ACCOUNT_SUBJECTS` values are
+transition inputs only; they no longer authorize or classify requests. After
+import, remove them from the deployment environment. Enrollment and revocation
+then apply on the next request without restarting the server.

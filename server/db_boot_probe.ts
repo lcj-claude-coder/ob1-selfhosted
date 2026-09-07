@@ -721,6 +721,19 @@ export async function probeDbAtBoot(
             `column grant before starting this server version.`,
         );
       }
+      const oauthSchema = await client.queryArray<[boolean]>(
+        `SELECT to_regclass('oauth_auth.allowed_subject') IS NOT NULL
+          AND to_regprocedure('oauth_auth.allow_subject(text,text,text)') IS NOT NULL
+          AND to_regprocedure('oauth_auth.revoke_subject(text)') IS NOT NULL
+          AND to_regprocedure('oauth_auth.import_subjects(text[],text[])') IS NOT NULL`,
+      );
+      if (oauthSchema.rows[0]?.[0] !== true) {
+        throw new RequiredSchemaError(
+          `[db] Missing OAuth admission schema. Apply db/13-oauth-subjects.sql, ` +
+            `run db/03-grants-assertion.sql, then import existing subjects with ` +
+            `subject-admin import-env before starting this server version.`,
+        );
+      }
       // Only reference the ledger after to_regclass proved it exists. Putting
       // this EXISTS in the catalog query above would fail at SQL parse time on
       // an old database, bypassing the actionable migration guidance.

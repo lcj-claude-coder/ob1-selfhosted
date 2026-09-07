@@ -542,3 +542,18 @@ export function makeEmbedDownDeps(message = "Ollama embed failed: 500 down") {
   });
   return { deps, message };
 }
+
+// Explicit mutable admission fixture for crypto/transport unit tests. Production
+// wires lookupOAuthSubject(pool, subject); environment lists are not consulted.
+export function makeSubjectLookup(allowed: string, services = "") {
+  const users = new Set(
+    allowed.split(",").map((s) => s.trim()).filter(Boolean),
+  );
+  const machines = new Set(
+    services.split(",").map((s) => s.trim()).filter(Boolean),
+  );
+  return (subject: string): Promise<"user" | "service" | null> =>
+    Promise.resolve(
+      users.has(subject) ? machines.has(subject) ? "service" : "user" : null,
+    );
+}

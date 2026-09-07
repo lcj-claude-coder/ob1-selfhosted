@@ -323,7 +323,7 @@ async function main(): Promise<void> {
   }
 
   // Opt-in subject print happens BEFORE the MCP attempt: under the server's
-  // fail-closed OAUTH_ALLOWED_SUBJECTS gate, a never-yet-enrolled client's
+  // fail-closed OAuth admission table, a never-yet-enrolled client's
   // first run ends in the 401 below, and this printed subject is exactly the
   // value the operator needs to enroll it. Printing after success would make
   // enrollment circular (can't succeed until enrolled, can't read the subject
@@ -342,9 +342,9 @@ async function main(): Promise<void> {
   if (!initializeResponse.ok) {
     const enrollmentHint = initializeResponse.status === 401
       ? " One common cause: this subject is not in the server's " +
-        "OAUTH_ALLOWED_SUBJECTS (fail-closed admission gate) — re-run with " +
+        "oauth_auth.allowed_subject (enroll with subject-admin allow) — re-run with " +
         "OAUTH_SMOKE_PRINT_SUBJECT=true to print the subject, enroll it, " +
-        "restart the server, and retry. If the allowlist is the cause, the " +
+        "and retry without restarting the server. If admission is the cause, the " +
         "refusal is normally recorded server-side (best-effort) in " +
         "mcp_auth_events with reason subject_not_allowed and the verified " +
         "subject; other 401 causes (wrong issuer/audience, expired or " +
@@ -377,7 +377,7 @@ async function main(): Promise<void> {
     );
   } else {
     console.log(
-      "Attribution signal: no signed gty=client-credentials claim; service labeling requires this exact subject in OAUTH_SERVICE_ACCOUNT_SUBJECTS.",
+      "Attribution signal: no signed gty=client-credentials claim; service labeling requires this exact subject enrolled with kind=service via subject-admin allow.",
     );
   }
   if (

@@ -38,6 +38,26 @@ expect_rejected() {
 # after 02-observability.sql.
 run_assertion >/dev/null
 
+# OAuth admission: reject widened reads, direct mutation, delegable grants and
+# PUBLIC definer access, then prove the migration reconciles direct ACL drift.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT UPDATE(kind) ON oauth_auth.allowed_subject TO openbrain_app" >/dev/null
+expect_rejected "OAuth runtime mutation" "OAuth runtime/admin must be read-only"
+apply_sql db/13-oauth-subjects.sql >/dev/null
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT SELECT(created_at) ON oauth_auth.allowed_subject TO openbrain_app" >/dev/null
+expect_rejected "OAuth runtime inventory widening" "unexpected OAuth admission SELECT"
+apply_sql db/13-oauth-subjects.sql >/dev/null
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT EXECUTE ON FUNCTION oauth_auth.allow_subject(text,text,text) TO PUBLIC" >/dev/null
+expect_rejected "OAuth PUBLIC enrollment" "grants assertion failed"
+apply_sql db/13-oauth-subjects.sql >/dev/null
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT SELECT(subject) ON oauth_auth.allowed_subject TO openbrain_token_admin WITH GRANT OPTION" >/dev/null
+expect_rejected "OAuth delegable admission" "OAuth admission privileges are delegable"
+apply_sql db/13-oauth-subjects.sql >/dev/null
+run_assertion >/dev/null
+
 # Auth-event writes and retention use separate credentials. Match the ticket's
 # SET ROLE acceptance probe directly, then prove the rollup can delete a row
 # without gaining INSERT/UPDATE or sideways corpus access.

@@ -279,10 +279,10 @@ automatically when those claims are present), nothing else:
 5. **Subject** — `sub` must be present and a bounded string free of ASCII
    control characters;
 6. **Authorization** — the verified `sub` must appear on the
-   `OAUTH_ALLOWED_SUBJECTS` allowlist. This list **fails closed**: with the
-   OAuth door enabled and the list unset or empty, every Bearer token is
-   rejected and the boot log warns. An IdP-side misconfiguration therefore stops
-   here instead of equaling full access.
+   `oauth_auth.allowed_subject` table as an active row. This list **fails
+   closed**: with the OAuth door enabled and no active admitted subjects, every
+   Bearer token is rejected and the boot log warns. An IdP-side misconfiguration
+   therefore stops here instead of equaling full access.
 
 Every rejection — including an allowlist miss — returns the same uniform 401,
 and every decision (admitted or refused) **enqueues** an audit row for the

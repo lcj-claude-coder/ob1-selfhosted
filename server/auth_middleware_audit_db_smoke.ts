@@ -1,3 +1,4 @@
+import { allowOAuthSubject, lookupOAuthSubject } from "./oauth_subjects.ts";
 // Explicit CI smoke for the `auth.ts` → `auth_audit.ts` → Postgres seam.
 //
 // This is not a *_test.ts file: db-init.yml runs it only against its
@@ -90,8 +91,17 @@ const { shutdownAuthAuditForTests } = await import("./auth_audit.ts");
 // Production shape: index.ts passes a native-token verifier into
 // createRequireAuth. The fake resolves exactly one secret to a label so the
 // native branch's audit wiring is exercised end-to-end.
-const requireAuth = createRequireAuth((token: string) =>
-  Promise.resolve(token === NATIVE_SECRET ? { label: NATIVE_LABEL } : null)
+const admissionPool = new Pool({
+  hostname: host,
+  port,
+  database: "openbrain",
+  user: "openbrain_app",
+  password: appPassword,
+}, 1);
+const requireAuth = createRequireAuth(
+  (token: string) =>
+    Promise.resolve(token === NATIVE_SECRET ? { label: NATIVE_LABEL } : null),
+  (subject) => lookupOAuthSubject(admissionPool, subject),
 );
 
 const app = new Hono();
@@ -153,6 +163,8 @@ async function drainRows(expected: number): Promise<AuditRow[]> {
 }
 
 try {
+  await allowOAuthSubject(adminPool, ADMITTED, null, "user");
+  await allowOAuthSubject(adminPool, ADMITTED_MACHINE, null, "service");
   // Clean slate.
   await drainRows(0);
 
@@ -298,6 +310,7 @@ try {
       "subject_not_allowed precedence over the dual-credential collapse",
   );
 } finally {
+  await admissionPool.end();
   globalThis.fetch = origFetch;
   await shutdownAuthAuditForTests();
   await adminPool.end();

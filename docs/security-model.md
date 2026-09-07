@@ -108,22 +108,25 @@ dumps can still read it.
   plus a bounded, non-empty, control-free string `sub`; verification fails
   closed before any source-marker stamping runs. Only after verification does a
   signed `gty=client-credentials` claim (including Auth0's default token
-  profile)—or an exact operator-configured subject for Auth0's RFC 9068 profile
-  or another issuer—select the `service` provenance label. That mapping changes
-  neither authentication nor authorization.
+  profile)—or an admitted subject with `kind=service` for Auth0's RFC 9068
+  profile or another issuer—select the `service` provenance label. That mapping
+  changes neither authentication nor authorization.
 - **Authorization is in-app, not delegated to the tenant.** After every
   cryptographic check passes, the verified `sub` must appear on the
-  `OAUTH_ALLOWED_SUBJECTS` allowlist or the request is rejected — with the same
-  uniform 401 as any other failure externally, and reason `subject_not_allowed`
-  plus the verified subject on the audit row internally. The list fails
-  **closed**: with the OAuth door enabled and the list unset or empty, every
-  Bearer is rejected (the boot log warns loudly). This exists because "the
-  tenant minted this token" and "the operator admits this account" are different
-  questions: an IdP-side misconfiguration — an accidentally-enabled social
-  connection, an unintended signup flow — mints perfectly valid tokens for
-  accounts the operator never meant to admit, and tenant configuration must not
-  be the only gate. The `OAUTH_SERVICE_ACCOUNT_SUBJECTS` attribution list never
-  grants access; a machine subject must also be allowlisted.
+  `oauth_auth.allowed_subject` table as an active row or the request is rejected
+  — with the same uniform 401 as any other failure externally, and reason
+  `subject_not_allowed` plus the verified subject on the audit row internally.
+  The list fails **closed**: with the OAuth door enabled and no active admission
+  rows, every Bearer is rejected (the boot log warns loudly). This exists
+  because "the tenant minted this token" and "the operator admits this account"
+  are different questions: an IdP-side misconfiguration — an
+  accidentally-enabled social connection, an unintended signup flow — mints
+  perfectly valid tokens for accounts the operator never meant to admit, and
+  tenant configuration must not be the only gate. Every request re-reads
+  admission and revocation from the database. The operator-only `subject-admin`
+  CLI changes admission using a dedicated role; the runtime cannot enroll
+  subjects. Legacy environment lists never provide a fallback. See
+  [migration and administration](oauth-subjects.md).
 - A boot-time JWKS reachability probe (with an explicit wall-clock timeout that
   also caps every later refresh) surfaces a typo'd JWKS URI at startup rather
   than at the first attacker request.
@@ -220,7 +223,7 @@ detection:
 | `openbrain_monitor`     | SELECT on `funnel_access_log` only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | host-side funnel monitor ([`scripts/funnel_monitor.sh`](../scripts/funnel_monitor.sh)) on the separate sink; it cannot read even the aggregate table, much less a thought or reason-coded auth event                                                                                                                                                                                                                                                           |
 | `openbrain_logs_rollup` | SELECT/DELETE on `funnel_access_log`; SELECT/INSERT/UPDATE/DELETE on `funnel_access_summary`; database `TEMPORARY` for its transaction-local projection                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | target-pinned sink summary and retention job; no persistent object/schema creation and no corpus presence                                                                                                                                                                                                                                                                                                                                                      |
 | `openbrain_logs_backup` | SELECT on `funnel_access_summary` only; inherits database CONNECT only, with no raw-table, DML, sequence, TEMPORARY, or schema-creation privilege                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | optional fixed qrexec producer for the encrypted aggregate backup; absent when that backup is not installed                                                                                                                                                                                                                                                                                                                                                    |
-| `openbrain_token_admin` | Lists token ID/prefix/label/timestamps and executes fixed register/revoke functions; cannot read hashes, memories, or mutate the table directly                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | profile-gated one-shot `token-admin` CLI; `NOLOGIN` when no password is provisioned                                                                                                                                                                                                                                                                                                                                                                            |
+| `openbrain_token_admin` | Lists native-token and OAuth-subject metadata and executes fixed credential lifecycle functions; cannot read hashes, memories, or mutate tables directly                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | profile-gated one-shot `token-admin` / `subject-admin` CLIs; `NOLOGIN` when no password is provisioned                                                                                                                                                                                                                                                                                                                                                         |
 | `openbrain_readonly`    | SELECT on everything + `BYPASSRLS` so full `pg_dump` works; no DML and no role memberships (including non-inheriting memberships reachable through `SET ROLE`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | trusted backup job, humans with psql/DBeaver                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 **Where those roles live in every Pattern B deployment.** The corpus holds only
@@ -397,9 +400,9 @@ security review.
 - `mcp` and `log-ingester`: non-root user, `cap_drop: [ALL]`, `read_only: true`
   rootfs, size-capped tmpfs, `no-new-privileges`; Pattern B additionally gives
   the ingester `network_mode: none` and only the sink socket bind.
-- `token-admin`: the same container hardening, profile-gated and one-shot. Only
-  it receives the dedicated lifecycle password; the long-running MCP container
-  never does.
+- `token-admin` and `subject-admin`: the same container hardening, profile-gated
+  and one-shot. Only it receives the dedicated lifecycle password; the
+  long-running MCP container never does.
 - `caddy`: a derived image strips the binary's file capability so a genuinely
   empty capability set works; read-only rootfs; logs on a dedicated volume the
   ingester mounts **read-only** (a compromised ingester can't tamper with the

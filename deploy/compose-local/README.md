@@ -251,11 +251,15 @@ docker compose exec -T postgres \
   < ../../db/12-auth-audit-grants.sql
 docker compose exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
+  < ../../db/13-oauth-subjects.sql
+docker compose exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/03-grants-assertion.sql
 # The Compose-backed summary reads its credential inside this service. Recreate
 # Postgres once so the newly-added environment value reaches the container;
 # the named data volume is preserved.
 docker compose up -d --no-deps --force-recreate --wait postgres
+# If OAuth is enabled, complete docs/oauth-subjects.md import/enrollment first.
 docker compose up -d --no-deps mcp
 )
 ```
@@ -279,11 +283,9 @@ before this block. Even a pure local install must inspect both tables rather
 than bypass the guard; the final assertion rejects the old relations and edge
 role names entirely.
 
-> **Upgrading to 1.20.0+ with the OAuth door enabled?** Set
-> `OAUTH_ALLOWED_SUBJECTS` in `.env` **before** the `up -d` roll — the new
-> in-app allowlist fails closed, so rolling without it rejects every Bearer
-> token (the native/static door is unaffected; the boot log warns). See the
-> variable's comment block in `.env.example`.
+> **OAuth-enabled upgrades:** complete the
+> [admission-table migration](../../docs/oauth-subjects.md) before the MCP roll.
+> Having the old environment allowlist alone no longer grants access.
 
 The migration backfills a stored `tsvector` under an access-exclusive lock that
 is held through both regular GIN index builds until commit, blocking searches
@@ -365,3 +367,14 @@ The revoked credential receives HTTP 401 on its next request. Data at rest is
 untouched. If an older deployment still uses `MCP_ACCESS_KEY`, migrate clients
 one at a time, then remove that variable and recreate `mcp`; the static key is
 not represented in the token inventory and cannot be revoked there.
+
+## Database-backed OAuth admission
+
+Before starting the current server, apply migration 13 and import or explicitly
+enroll existing OAuth subjects with the tools-profile `subject-admin` CLI.
+Follow [OAuth subject admission](../../docs/oauth-subjects.md) for the complete
+transactional upgrade, dedicated administrator setup, verification and rollback.
+Legacy `OAUTH_ALLOWED_SUBJECTS` / `OAUTH_SERVICE_ACCOUNT_SUBJECTS` values are
+transition inputs only; they no longer authorize or classify requests. After
+import, remove them from the deployment environment. Enrollment and revocation
+then apply on the next request without restarting the server.

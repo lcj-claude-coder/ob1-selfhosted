@@ -157,6 +157,7 @@ sudo -u postgres psql -d openbrain -c "CREATE EXTENSION IF NOT EXISTS vector;"
 #   db/10-thought-mutations.sql
 #   db/11-session-update-grants.sql
 #   db/12-auth-audit-grants.sql
+#   db/13-oauth-subjects.sql
 #   db/03-grants-assertion.sql  # always last
 ```
 
@@ -449,3 +450,12 @@ its own local log sink,
 [#13](https://github.com/lcjanke2020/ob1-selfhosted/issues/13) and
 [#12](https://github.com/lcjanke2020/ob1-selfhosted/issues/12) both resolved —
 the edge is no longer a peer of this qube at all).
+
+## Credential administrator over ConnectTCP
+
+The app qube's inactive `tools` profile now includes `subject-admin` and
+`token-admin`. Provision `openbrain_token_admin` using the
+[direct psql helper and admission migration](../../../docs/oauth-subjects.md),
+install its two role-scoped loopback HBA entries from the shipped snippet, and
+reload PostgreSQL. Preserve the same app→DB dom0 channel and localhost listener.
+The role can manage credentials but cannot read memories or token hashes.

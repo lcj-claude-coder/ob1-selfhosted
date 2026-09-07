@@ -92,25 +92,14 @@ PostgreSQL init scripts do not rerun on an existing data directory. Quiesce
 writes and take a verified backup, then set `OPENBRAIN_TOKEN_ADMIN_PASSWORD` in
 `.env` and run:
 
-> The commands below are for the single-box compose install. A deployment whose
-> database is not in the compose project has nothing to `exec` into — see
-> [Upgrading an existing deployment](../deploy/qubes/app-qube/README.md#upgrading-an-existing-deployment)
-> for the equivalent over a network connection. There, the upgrade helper is
-> also unusable (it drives `docker compose exec`); leave
-> `OPENBRAIN_TOKEN_ADMIN_PASSWORD` unset and migration 08 creates the
-> administrator as a `NOLOGIN` role, which is the correct end state for an
-> OAuth-only deployment that will not mint native tokens. Reapplying migration
-> 08 preserves whichever state you chose, so the choice survives later windows.
-> Granting the role `LOGIN` by hand —
-> `ALTER ROLE openbrain_token_admin WITH LOGIN PASSWORD '…';` — prepares the
-> database role and nothing further. The helper issues that grant alongside a
-> `NOSUPERUSER`/`NOCREATEDB`/`NOCREATEROLE`/`NOREPLICATION`/`NOBYPASSRLS`
-> reconciliation; migration 08 applies those same flags every time it runs, so
-> the hand statement does not repeat them. What it does not supply is the rest:
-> the shipped split topology has no `pg_hba` line for `openbrain_token_admin`,
-> no administrator client, and pins `ENABLE_NATIVE_TOKENS=false`, so issuing and
-> accepting native tokens there is not a supported procedure today. Leaving the
-> role `NOLOGIN` is the safer default.
+> The commands below use a local Compose database. For an external database,
+> including split Qubes, use the administrator provisioning and ConnectTCP/HBA
+> procedure in
+> [OAuth subject admission](oauth-subjects.md#split-qubes-administrator-path).
+> Both CLIs share the dedicated admin role. Provisioning that login does not
+> enable native-token authentication; the public Qubes posture remains
+> `ENABLE_NATIVE_TOKENS=false`. Leave the role `NOLOGIN` when no credential
+> administration is needed.
 
 ```bash
 cd deploy/compose-local
@@ -120,8 +109,12 @@ docker compose exec -T postgres \
   < ../../db/08-access-tokens.sql
 docker compose exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
+  < ../../db/13-oauth-subjects.sql
+docker compose exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/03-grants-assertion.sql
 docker compose build mcp token-admin
+# If OAuth is enabled, complete docs/oauth-subjects.md import/enrollment first.
 docker compose up -d --no-deps mcp
 ```
 
@@ -139,7 +132,8 @@ role can select only the four fields needed for authentication. It cannot
 create, change, or revoke tokens.
 
 The dedicated `openbrain_token_admin` role can list non-secret metadata and
-execute two fixed-search-path `SECURITY DEFINER` functions. It cannot read token
+execute fixed-search-path `SECURITY DEFINER` lifecycle functions for native
+tokens and [OAuth subject admission](oauth-subjects.md). It cannot read token
 hashes, memories, or the identity sequence, and it has no direct table mutation
 privilege. The completed-catalog grant assertion and database smoke test pin
 those boundaries.

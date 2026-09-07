@@ -1,3 +1,4 @@
+import { makeSubjectLookup } from "./api_test_support.ts";
 // Tests for the door + identity Hono context vars that `requireAuth`
 // sets on each successful auth branch. Downstream tool handlers read these
 // (indirectly, via the createMcpServer(pool, { door, sub }) factory closure
@@ -71,7 +72,14 @@ async function runDoorContextTest(t: Deno.TestContext): Promise<void> {
     jwksUrl: JWKS_URL,
   });
   const restoreFetch = fixture.installFetchMock();
-  const { requireAuth } = await import("./auth.ts");
+  const { createRequireAuth } = await import("./auth.ts");
+  const requireAuth = createRequireAuth(
+    null,
+    makeSubjectLookup(
+      TEST_ENV.OAUTH_ALLOWED_SUBJECTS,
+      TEST_ENV.OAUTH_SERVICE_ACCOUNT_SUBJECTS,
+    ),
+  );
   // The sentinel response keeps null distinct from undefined/empty string.
   const app = makeAuthTestApp(requireAuth, (context) =>
     context.json({

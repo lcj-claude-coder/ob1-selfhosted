@@ -95,6 +95,7 @@ function bootQueryHandler(
   notificationStateExists = true,
 ): QueryHandler {
   return (sql) => {
+    if (sql.includes("oauth_auth.allowed_subject")) return { rows: [[true]] };
     if (sql.includes("to_regclass")) {
       return { rows: [requiredSchema] };
     }
@@ -114,7 +115,7 @@ Deno.test("probeDbAtBoot: success path validates connectivity and hybrid schema"
 
   await probeDbAtBoot(fakePool, "db:5432");
   const queries = client.queryArrayCalls.map(({ sql }) => sql);
-  assertEquals(queries.length, 4);
+  assertEquals(queries.length, 5);
   assertEquals(queries[0], "SELECT 1");
   assert(queries[1].includes("idx_thoughts_content_tsv"));
   assert(queries[1].includes("idx_thoughts_content_trgm"));
@@ -165,8 +166,9 @@ Deno.test("probeDbAtBoot: success path validates connectivity and hybrid schema"
       "metadata_degradation_failed_channels_shape",
     ),
   );
-  assert(queries[2].includes("metadata_degradation_notification_state"));
-  assert(queries[3].includes("memory_scope.workspace"));
+  assert(queries[2].includes("oauth_auth.allowed_subject"));
+  assert(queries[3].includes("metadata_degradation_notification_state"));
+  assert(queries[4].includes("memory_scope.workspace"));
   assertEquals(client.releaseCalls, 1);
 });
 
@@ -542,4 +544,19 @@ Deno.test("probeDbAtBoot: fast success never emits the slow-connect warning", as
   } finally {
     console.warn = origWarn;
   }
+});
+
+Deno.test("probeDbAtBoot: missing OAuth admission requires migration before startup", async () => {
+  const baseline = bootQueryHandler();
+  const { pool, client } = makeFakePool((sql, args) =>
+    sql.includes("oauth_auth.allowed_subject")
+      ? { rows: [[false]] }
+      : baseline(sql, args)
+  );
+  const error = await assertRejects(
+    () => probeDbAtBoot(pool, "db:5432"),
+    Error,
+  );
+  assertStringIncludes(error.message, "db/13-oauth-subjects.sql");
+  assertEquals(client.releaseCalls, 1);
 });

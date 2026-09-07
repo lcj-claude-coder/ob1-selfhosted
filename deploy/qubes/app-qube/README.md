@@ -171,15 +171,12 @@ for what the schema contains, and
 [Upgrading an existing deployment](#upgrading-an-existing-deployment) for how to
 apply it in this topology.
 
-Server 1.20.0 requires a re-apply of `db/02-observability.sql` (it now converges
-`mcp_auth_events` in place to the allowed+denied audit shape) AND
-`OAUTH_ALLOWED_SUBJECTS` in this qube's `.env` **before the container roll**:
-the allowlist fails closed, so rolling the container without it leaves the
-OAuth-only deployment rejecting every Bearer — a deliberate lockout posture,
-loudly warned in the boot log, but not what an upgrade intends. Set it to the
-exact `sub` claim(s) to admit (Auth0 dashboard → User Management → Users →
-user_id), then roll, then verify a live client and check `mcp_auth_events` for
-the new `outcome='allowed'` rows.
+Server 1.20.0 introduced the allowed+denied audit shape in
+`db/02-observability.sql`. The current release also requires
+`db/13-oauth-subjects.sql`: admission moves from environment lists into the
+active rows of `oauth_auth.allowed_subject`. Import existing subjects before
+rolling MCP, or every Bearer will be rejected. The exact procedure is in
+[OAuth subject admission](../../../docs/oauth-subjects.md).
 
 Server 1.25.0 requires the dedicated `openbrain_auth_rollup` login and
 `db/12-auth-audit-grants.sql`. Set `OPENBRAIN_AUTH_ROLLUP_PASSWORD`, provision
@@ -283,17 +280,17 @@ before the relations it asserts on exist. The db qube records the same canonical
 order
 ([First boot / provisioning](../db-qube/README.md#first-boot--provisioning)).
 
-| Server | Migration                                                                  | Additional requirement                                                                                                                       |
-| ------ | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1.7.0  | `db/05-hybrid-search.sql`                                                  | pgvector 0.8.0+ (filtered iterative scans)                                                                                                   |
-| 1.9.0  | `db/06-spaces.sql`                                                         | PostgreSQL 15+ (`NULLS NOT DISTINCT`); superuser, not owner                                                                                  |
-| 1.16.0 | `db/07-metadata-degradation.sql`                                           | from 1.17.0, an explicit `METADATA_FALLBACK_POLICY` in `.env`                                                                                |
-| 1.19.0 | `db/08-access-tokens.sql`                                                  | —                                                                                                                                            |
-| 1.20.0 | `db/02-observability.sql` (re-apply; converges `mcp_auth_events` in place) | `OAUTH_ALLOWED_SUBJECTS` in `.env` **before** the container roll — fail-closed                                                               |
-| Arc B  | `db/02-observability.sql`, then `db/09-retire-corpus-funnel.sql`           | sink cutover complete; both legacy tables archived, verified, and empty; retired HBA rules removed                                           |
-| 1.22.0 | `db/10-thought-mutations.sql`                                              | superuser (table-owner SECURITY DEFINER helper; narrows the app's thoughts UPDATE to content columns); rerun `03-grants-assertion.sql` after |
-| 1.24.0 | `db/11-session-update-grants.sql`                                          | database owner; narrows session UPDATE to content columns and removes artifact UPDATE; rerun `03-grants-assertion.sql` after                 |
-| 1.25.0 | `db/12-auth-audit-grants.sql`                                              | first provision `openbrain_auth_rollup` and install/reload its HBA lines; rerun `03-grants-assertion.sql` after                              |
+| Server              | Migration                                                                  | Additional requirement                                                                                                                       |
+| ------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.7.0               | `db/05-hybrid-search.sql`                                                  | pgvector 0.8.0+ (filtered iterative scans)                                                                                                   |
+| 1.9.0               | `db/06-spaces.sql`                                                         | PostgreSQL 15+ (`NULLS NOT DISTINCT`); superuser, not owner                                                                                  |
+| 1.16.0              | `db/07-metadata-degradation.sql`                                           | from 1.17.0, an explicit `METADATA_FALLBACK_POLICY` in `.env`                                                                                |
+| 1.19.0              | `db/08-access-tokens.sql`                                                  | —                                                                                                                                            |
+| 1.20.0 (historical) | `db/02-observability.sql` (re-apply; converges `mcp_auth_events` in place) | historical env admission; current upgrades must import it into migration 13 before rolling MCP                                               |
+| Arc B               | `db/02-observability.sql`, then `db/09-retire-corpus-funnel.sql`           | sink cutover complete; both legacy tables archived, verified, and empty; retired HBA rules removed                                           |
+| 1.22.0              | `db/10-thought-mutations.sql`                                              | superuser (table-owner SECURITY DEFINER helper; narrows the app's thoughts UPDATE to content columns); rerun `03-grants-assertion.sql` after |
+| 1.24.0              | `db/11-session-update-grants.sql`                                          | database owner; narrows session UPDATE to content columns and removes artifact UPDATE; rerun `03-grants-assertion.sql` after                 |
+| 1.25.0              | `db/12-auth-audit-grants.sql`                                              | first provision `openbrain_auth_rollup` and install/reload its HBA lines; rerun `03-grants-assertion.sql` after                              |
 
 Migration 08 is required by 1.19.0 **even when native tokens are disabled**.
 `ENABLE_NATIVE_TOKENS` gates the credential door, not the schema: the server's
@@ -730,3 +727,15 @@ pg_isready -h <this-qube-ip> -p 5432  # "accepting connections" — via qrexec t
 # :8787 or :5432 times out (the qubes input default-drop — the ss lines above
 # are what prove no wider listener exists behind it).
 ```
+
+## Subject administration
+
+The `tools` profile provides one-shot `subject-admin` and `token-admin` clients
+through this qube's existing ConnectTCP database forwarder. They carry only the
+`OPENBRAIN_TOKEN_ADMIN_PASSWORD` credential, which is never injected into MCP.
+Provision the role and DB-qube HBA records, apply migration 13 plus the final
+assertion, import the old subject lists, and remove those lists from `.env`
+before the MCP roll. Follow
+[the full migration and rollback procedure](../../../docs/oauth-subjects.md). No
+ingress-qube or dom0 policy change is needed for subject administration. Native
+tokens remain disabled for HTTP authentication in this deployment.
