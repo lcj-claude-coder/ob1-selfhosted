@@ -116,7 +116,7 @@ REVOKE ALL ON FUNCTION oauth_auth.allow_subject(TEXT, TEXT, TEXT),
 
 GRANT USAGE ON SCHEMA oauth_auth
   TO openbrain_app, openbrain_token_admin, openbrain_readonly;
-GRANT SELECT (subject, label, kind, revoked_at)
+GRANT SELECT (subject, kind, revoked_at)
   ON oauth_auth.allowed_subject TO openbrain_app;
 GRANT SELECT (subject, label, kind, created_at, revoked_at)
   ON oauth_auth.allowed_subject TO openbrain_token_admin;

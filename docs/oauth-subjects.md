@@ -10,11 +10,12 @@ also fails closed. No admission decision is cached.
 Use the operator-only `subject-admin` CLI on the trusted application host. It
 uses the same `openbrain_token_admin` credential as `token-admin`. There is no
 new HTTP or MCP administration endpoint, listener, or authentication provider.
-The runtime receives only the application password and SELECT on the four
-verification columns. The administrator can list admission metadata and invoke
-fixed-search-path functions; it cannot read memories or token hashes, or
-directly change the tables. Backups include subject labels, kinds and revocation
-state.
+The runtime receives only the application password and SELECT on the three
+verification columns: `subject`, `kind` and `revoked_at`. Labels remain
+available only to administrators and backups. The administrator can list
+admission metadata and invoke fixed-search-path functions; it cannot read
+memories or token hashes, or directly change the tables. Backups include subject
+labels, kinds and revocation state.
 
 ## Commands
 

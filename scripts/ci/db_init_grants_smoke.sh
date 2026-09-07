@@ -107,6 +107,12 @@ super_psql -v ON_ERROR_STOP=1 -c \
 expect_rejected "OAuth runtime inventory widening" "unexpected OAuth admission SELECT"
 apply_sql db/13-oauth-subjects.sql >/dev/null
 super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT SELECT(label) ON oauth_auth.allowed_subject TO openbrain_app" >/dev/null
+expect_rejected "OAuth runtime label widening" "unexpected OAuth admission SELECT"
+apply_sql db/13-oauth-subjects.sql >/dev/null
+test "$(super_psql -tAc \
+  "SELECT has_column_privilege('openbrain_app', 'oauth_auth.allowed_subject', 'label', 'SELECT')")" = f
+super_psql -v ON_ERROR_STOP=1 -c \
   "GRANT EXECUTE ON FUNCTION oauth_auth.allow_subject(text,text,text) TO PUBLIC" >/dev/null
 expect_rejected "OAuth PUBLIC enrollment" "grants assertion failed"
 apply_sql db/13-oauth-subjects.sql >/dev/null

@@ -1477,7 +1477,7 @@ BEGIN
       WHERE attrelid = subject_table AND attnum > 0 AND NOT attisdropped LOOP
       IF has_column_privilege(role_oid, subject_table, column_name, 'SELECT')
         IS DISTINCT FROM (column_name = ANY(CASE WHEN role_oid = app_oid
-          THEN ARRAY['subject', 'label', 'kind', 'revoked_at']
+          THEN ARRAY['subject', 'kind', 'revoked_at']
           ELSE ARRAY['subject', 'label', 'kind', 'created_at', 'revoked_at'] END)) THEN
         RAISE EXCEPTION 'grants assertion failed: unexpected OAuth admission SELECT grant on %.', column_name;
       END IF;

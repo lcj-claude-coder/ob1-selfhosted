@@ -184,6 +184,7 @@ try {
   }
   for (
     const statement of [
+      "SELECT label FROM oauth_auth.allowed_subject",
       "SELECT created_at FROM oauth_auth.allowed_subject",
       "SELECT * FROM oauth_auth.allow_subject('bypass',NULL,'user')",
       "SELECT * FROM oauth_auth.revoke_subject('user-a')",
