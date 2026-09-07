@@ -1445,7 +1445,10 @@ BEGIN
     RAISE EXCEPTION 'grants assertion failed: OAuth admission schema missing; apply db/13-oauth-subjects.sql.';
   END IF;
   SELECT relowner INTO relation_owner FROM pg_class WHERE oid = subject_table;
-  IF relation_owner = ANY(ARRAY[app_oid, admin_oid, backup_oid]) THEN
+  IF relation_owner = ANY(ARRAY[app_oid, admin_oid, backup_oid]) OR EXISTS (
+    SELECT 1 FROM pg_namespace WHERE oid = 'oauth_auth'::regnamespace
+      AND nspowner = ANY(ARRAY[app_oid, admin_oid, backup_oid])
+  ) THEN
     RAISE EXCEPTION 'grants assertion failed: runtime/admin/backup must not own OAuth admission.';
   END IF;
   IF EXISTS (
@@ -1481,6 +1484,7 @@ BEGIN
     END LOOP;
   END LOOP;
   IF NOT has_schema_privilege(backup_oid, 'oauth_auth', 'USAGE')
+     OR has_schema_privilege(backup_oid, 'oauth_auth', 'CREATE')
      OR NOT has_table_privilege(backup_oid, subject_table, 'SELECT')
      OR has_table_privilege(backup_oid, subject_table,
        'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')

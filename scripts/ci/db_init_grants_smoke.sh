@@ -60,6 +60,31 @@ apply_sql db/13-oauth-subjects.sql >/dev/null
 run_assertion >/dev/null
 dump_oauth_as_backup
 
+# Backups cannot create objects or own the schema. Ownership retains DROP
+# authority even after its owner revokes its own CREATE privilege.
+super_psql -v ON_ERROR_STOP=1 -c \
+  "GRANT CREATE ON SCHEMA oauth_auth TO openbrain_readonly" >/dev/null
+expect_rejected "OAuth backup schema CREATE drift" "backup cannot safely dump OAuth admission"
+apply_sql db/13-oauth-subjects.sql >/dev/null
+run_assertion >/dev/null
+for role in openbrain_app openbrain_token_admin openbrain_readonly; do
+  super_psql -v ON_ERROR_STOP=1 -c \
+    "ALTER SCHEMA oauth_auth OWNER TO $role;
+     REVOKE CREATE ON SCHEMA oauth_auth FROM $role" >/dev/null
+  test "$(super_psql -tAc \
+    "SELECT has_schema_privilege('$role', 'oauth_auth', 'CREATE')")" = f
+  expect_rejected "OAuth schema ownership by $role without CREATE" \
+    "runtime/admin/backup must not own OAuth admission"
+  # Demonstrate the owner-only destructive authority in a rolled-back fixture.
+  super_psql -v ON_ERROR_STOP=1 -c \
+    "BEGIN; SET LOCAL ROLE $role; DROP SCHEMA oauth_auth CASCADE; ROLLBACK" >/dev/null
+  super_psql -v ON_ERROR_STOP=1 -c \
+    "ALTER SCHEMA oauth_auth OWNER TO postgres" >/dev/null
+  apply_sql db/13-oauth-subjects.sql >/dev/null
+  run_assertion >/dev/null
+done
+dump_oauth_as_backup
+
 # Backups must neither resurrect a revoked subject nor wipe admission state.
 # Table-level checks alone miss column-only UPDATE/INSERT/REFERENCES grants.
 for privilege in INSERT UPDATE DELETE TRUNCATE REFERENCES TRIGGER \
