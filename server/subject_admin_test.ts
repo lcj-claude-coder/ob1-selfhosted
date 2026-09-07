@@ -91,11 +91,17 @@ Deno.test("subject-admin binds literal identities and labels; invalid commands n
       "worker",
       "unadmitted",
     ]]);
-    await assertRejects(
-      () => runSubjectAdmin(["import-env"], pool),
-      Error,
-      "OAUTH_ALLOWED_SUBJECTS is empty",
-    );
+    for (const allowed of ["", "   "]) {
+      assertEquals(
+        await runSubjectAdmin(["import-env"], pool, { allowed, services: "" }),
+        1,
+      );
+      assertEquals(logs.at(-1), [
+        "No legacy subjects to import: OAUTH_ALLOWED_SUBJECTS is empty. " +
+        "If already migrated, use subject-admin list; to enroll a new identity, use subject-admin allow.",
+      ]);
+    }
+    assertEquals(client.queryObjectCalls.length, 3);
     assertEquals(client.releaseCalls, 3);
   } finally {
     console.log = oldLog;

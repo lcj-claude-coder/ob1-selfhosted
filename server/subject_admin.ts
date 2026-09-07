@@ -47,6 +47,13 @@ export async function runSubjectAdmin(
       return 1;
     }
   } else if (command === "import-env" && values.length === 0) {
+    if (!legacy.allowed.trim()) {
+      console.error(
+        "No legacy subjects to import: OAUTH_ALLOWED_SUBJECTS is empty. " +
+          "If already migrated, use subject-admin list; to enroll a new identity, use subject-admin allow.",
+      );
+      return 1;
+    }
     const added = await importOAuthSubjects(
       pool,
       parseLegacySubjects(legacy.allowed),
