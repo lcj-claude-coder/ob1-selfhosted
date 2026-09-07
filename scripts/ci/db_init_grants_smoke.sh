@@ -38,6 +38,17 @@ expect_rejected() {
 # after 02-observability.sql.
 run_assertion >/dev/null
 
+# Backups must neither resurrect a revoked subject nor wipe admission state.
+# Table-level checks alone miss column-only UPDATE/INSERT/REFERENCES grants.
+for privilege in INSERT UPDATE DELETE TRUNCATE REFERENCES TRIGGER \
+    'UPDATE(revoked_at)' 'INSERT(subject)' 'REFERENCES(subject)'; do
+  super_psql -v ON_ERROR_STOP=1 -c \
+    "GRANT $privilege ON oauth_auth.allowed_subject TO openbrain_readonly" >/dev/null
+  expect_rejected "OAuth backup $privilege drift" "backup cannot safely dump OAuth admission"
+  apply_sql db/13-oauth-subjects.sql >/dev/null
+  run_assertion >/dev/null
+done
+
 # OAuth admission: reject widened reads, direct mutation, delegable grants and
 # PUBLIC definer access, then prove the migration reconciles direct ACL drift.
 super_psql -v ON_ERROR_STOP=1 -c \

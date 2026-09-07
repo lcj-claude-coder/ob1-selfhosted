@@ -1480,8 +1480,12 @@ BEGIN
       END IF;
     END LOOP;
   END LOOP;
-  IF NOT has_table_privilege(backup_oid, subject_table, 'SELECT') THEN
-    RAISE EXCEPTION 'grants assertion failed: backup cannot dump OAuth admission.';
+  IF NOT has_table_privilege(backup_oid, subject_table, 'SELECT')
+     OR has_table_privilege(backup_oid, subject_table,
+       'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+     OR has_any_column_privilege(backup_oid, subject_table,
+       'INSERT, UPDATE, REFERENCES') THEN
+    RAISE EXCEPTION 'grants assertion failed: backup cannot safely dump OAuth admission.';
   END IF;
   -- Even unrelated CREATE authority lets an administrator install definer
   -- wrappers or poison future objects. No persistent object creation is needed.
