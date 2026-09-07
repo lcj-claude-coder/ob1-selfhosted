@@ -361,11 +361,48 @@ try {
     assertEquals(lookupCalls, 2);
   }
 
+  // ---- 10. Missing lookup wiring is unavailable admission, not a negative
+  // database result. The exported default must not record the verified subject.
+  {
+    const { requireAuth } = await import("./auth.ts");
+    const unwired = new Hono();
+    unwired.use("*", requireAuth);
+    unwired.all("*", (c) => c.text("must not reach handler"));
+    const valid = await signToken(ADMITTED);
+    const [header, payload] = valid.split(".");
+    const invalid = `${header}.${payload}.${"A".repeat(342)}`;
+    let expectedBody: string | undefined;
+    for (const bearer of [invalid, valid]) {
+      for (const brainKey of [null, "wrong-key"]) {
+        const headers = new Headers({ authorization: `Bearer ${bearer}` });
+        if (brainKey) headers.set("x-brain-key", brainKey);
+        const res = await unwired.request("/mcp", { headers });
+        assertEquals(res.status, 401);
+        const body = await res.text();
+        expectedBody ??= body;
+        assertEquals(body, expectedBody);
+        const rows = await drainRows(1);
+        assertEquals(rows.length, 1);
+        assertEquals(rows[0].outcome, "denied");
+        assertEquals(
+          rows[0].reason,
+          bearer === valid
+            ? "admission_unavailable"
+            : brainKey
+            ? "invalid_credentials"
+            : "token_validation_failed",
+        );
+        assertEquals(rows[0].subject, null);
+        assertEquals(rows[0].door, null);
+      }
+    }
+  }
+
   console.log(
     "middleware audit smoke: real middleware landed the exact allowed/" +
-      "denied rows for all nine credential scenarios — OAuth user, OAuth " +
+      "denied rows for all ten credential scenarios — OAuth user, OAuth " +
       "service, native token, static key, and the denial shapes incl. " +
-      "subject_not_allowed/admission_unavailable precedence and invalid-signature isolation",
+      "subject_not_allowed/admission_unavailable precedence, missing wiring and invalid-signature isolation",
   );
 } finally {
   await admissionPool.end();

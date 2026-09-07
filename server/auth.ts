@@ -615,9 +615,10 @@ export function createRequireAuth(
           // wiring, empty/revoked admission, and DB failures all fail closed.
           // Legacy env lists are never a fallback for database admission.
           const payload = await verifyBearer(m[1].trim());
+          if (!lookupSubject) throw new OAuthAdmissionUnavailableError();
           let kind;
           try {
-            kind = await lookupSubject?.(payload.sub);
+            kind = await lookupSubject(payload.sub);
           } catch {
             throw new OAuthAdmissionUnavailableError();
           }
