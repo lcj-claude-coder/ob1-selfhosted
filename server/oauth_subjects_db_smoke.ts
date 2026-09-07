@@ -1,5 +1,10 @@
 // Explicit disposable-DB integration smoke: run only through the DB-init runner.
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { Pool } from "postgres";
 import {
   allowOAuthSubject,
@@ -10,6 +15,7 @@ import {
   revokeOAuthSubject,
 } from "./oauth_subjects.ts";
 import { makeAuthTestApp, makeJwksFixture } from "./api_test_support.ts";
+import { probeDbAtBoot } from "./db_boot_probe.ts";
 
 const common = {
   hostname: Deno.env.get("DB_SMOKE_HOST") ?? "127.0.0.1",
@@ -68,6 +74,7 @@ try {
     "requires empty fixture",
   );
   assertEquals(await hasActiveOAuthSubjects(runtime), false);
+  await probeDbAtBoot(runtime, "disposable OAuth fixture");
   assertEquals((await request()).status, 401);
   assertEquals(
     (await request(await fixture.signToken({ claims: { sub: "legacy-only" } })))
@@ -134,6 +141,35 @@ try {
   await allowOAuthSubject(admin, "machine-a", "Worker", "service");
   assertEquals(await lookupOAuthSubject(runtime, "machine-a"), "service");
 
+  // A healthy catalog and an active row do not prove the runtime can read all
+  // lookup columns. Exercise the real boot probe under each narrowed grant.
+  for (const column of ["subject", "kind", "revoked_at"]) {
+    await sql(
+      owner,
+      `REVOKE SELECT(${column}) ON oauth_auth.allowed_subject FROM openbrain_app`,
+    );
+    try {
+      if (column !== "revoked_at") {
+        assertEquals(await hasActiveOAuthSubjects(runtime), true);
+      }
+      const error = await assertRejects(
+        () => probeDbAtBoot(runtime, "disposable OAuth fixture"),
+        Error,
+      );
+      assertStringIncludes(error.message, "required OAuth admission columns");
+      assertStringIncludes(error.message, "db/13-oauth-subjects.sql");
+      assertStringIncludes(error.message, "db/03-grants-assertion.sql");
+      await assertRejects(() => lookupOAuthSubject(runtime, "user-a"));
+    } finally {
+      await sql(
+        owner,
+        `GRANT SELECT(${column}) ON oauth_auth.allowed_subject TO openbrain_app`,
+      );
+    }
+    await probeDbAtBoot(runtime, "disposable OAuth fixture");
+    assertEquals((await request()).status, 200);
+  }
+
   for (
     const statement of [
       "SELECT content FROM public.thoughts LIMIT 1",
@@ -180,7 +216,7 @@ try {
     401,
   );
   console.log(
-    "OAuth admission: real JWT/DB, concurrent atomic import, next-request revoke, classification, rollback and role boundaries passed",
+    "OAuth admission: real JWT/DB, concurrent atomic import, next-request revoke, classification, rollback, boot read grants and role boundaries passed",
   );
 } finally {
   restoreFetch();

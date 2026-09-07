@@ -735,6 +735,21 @@ export async function probeDbAtBoot(
             `import-env or enroll them with subject-admin allow before the roll.`,
         );
       }
+      // Check the columns used by admission, even on an empty table. The
+      // active-subject check only needs revoked_at and can otherwise succeed
+      // after SELECT(subject) or SELECT(kind) has drifted away.
+      try {
+        await client.queryArray(
+          `SELECT subject, kind, revoked_at FROM oauth_auth.allowed_subject
+           WHERE false`,
+        );
+      } catch {
+        throw new RequiredSchemaError(
+          `[db] Cannot read required OAuth admission columns. Reapply ` +
+            `db/13-oauth-subjects.sql as the database owner, then run ` +
+            `db/03-grants-assertion.sql before starting server 1.26.0.`,
+        );
+      }
       // Only reference the ledger after to_regclass proved it exists. Putting
       // this EXISTS in the catalog query above would fail at SQL parse time on
       // an old database, bypassing the actionable migration guidance.
