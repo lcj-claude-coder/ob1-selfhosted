@@ -41,7 +41,9 @@ entry**. `revoke` preserves its row and timestamps and takes effect on the next
 request; already admitted in-flight requests may finish. Repeated revoke or an
 unknown subject exits 1. Invalid command syntax exits 2. `--json` is a trailing
 flag; to use a label literally named `--json`, supply it followed by another
-`--json`.
+`--json`. The same applies when revoking a subject literally named `--json`: use
+`subject-admin revoke '--json' --json`. Quoting alone does not distinguish that
+subject from the trailing flag.
 
 `kind=service` supplies the classification for issuers without a signed grant
 claim. Auth0's signed `gty=client-credentials` still selects `door=service`,
