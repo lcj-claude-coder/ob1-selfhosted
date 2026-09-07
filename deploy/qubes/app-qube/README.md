@@ -172,7 +172,7 @@ for what the schema contains, and
 apply it in this topology.
 
 Server 1.20.0 introduced the allowed+denied audit shape in
-`db/02-observability.sql`. The current release also requires
+`db/02-observability.sql`. Server 1.26.0 also requires
 `db/13-oauth-subjects.sql`: admission moves from environment lists into the
 active rows of `oauth_auth.allowed_subject`. Import existing subjects before
 rolling MCP, or every Bearer will be rejected. The exact procedure is in

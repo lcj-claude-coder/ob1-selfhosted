@@ -69,7 +69,7 @@ the new server passes its smoke checks.
    For an external database, including the Qubes app→DB ConnectTCP path, run
    native **psql 15 or newer** from the application host via the same helper.
    `\getenv`, used to read credentials without command arguments, was added in
-   [PostgreSQL 15](https://www.postgresql.org/docs/15/release-15.html#RELEASE-15-PSQL):
+   [PostgreSQL 15](https://www.postgresql.org/docs/15/release-15.html):
 
    ```bash
    COMPOSE_DIR="$PWD" bash ../../../scripts/upgrade-enable-token-admin-role.sh --direct
