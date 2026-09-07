@@ -245,6 +245,9 @@ class SubjectNotAllowedError extends Error {
   }
 }
 
+// Audit classification only. Never retain or expose the underlying DB error.
+class OAuthAdmissionUnavailableError extends Error {}
+
 async function verifyBearer(token: string): Promise<VerifiedBearerPayload> {
   if (!jwks) throw new Error("OAuth not enabled");
   // `requiredClaims: ["exp"]` forces the token to carry an
@@ -598,6 +601,7 @@ export function createRequireAuth(
     // 'subject_not_allowed' audit reason + subject column below; the
     // response stays the uniform envelope.
     let disallowedSubject: string | null = null;
+    let admissionUnavailable = false;
     if (ENABLE_OAUTH) {
       const authz = c.req.header("authorization") ?? "";
       const m = /^Bearer\s+(.+)$/i.exec(authz);
@@ -611,7 +615,12 @@ export function createRequireAuth(
           // wiring, empty/revoked admission, and DB failures all fail closed.
           // Legacy env lists are never a fallback for database admission.
           const payload = await verifyBearer(m[1].trim());
-          const kind = await lookupSubject?.(payload.sub);
+          let kind;
+          try {
+            kind = await lookupSubject?.(payload.sub);
+          } catch {
+            throw new OAuthAdmissionUnavailableError();
+          }
           if (kind !== "user" && kind !== "service") {
             throw new SubjectNotAllowedError(payload.sub);
           }
@@ -632,8 +641,11 @@ export function createRequireAuth(
         } catch (err) {
           if (err instanceof SubjectNotAllowedError) {
             disallowedSubject = err.sub;
+          } else if (err instanceof OAuthAdmissionUnavailableError) {
+            admissionUnavailable = true;
           }
-          // Fall through to 401 with a token-validation reason below.
+          // Fall through to the uniform 401; the audit distinguishes admission
+          // storage failures from absent/revoked rows and token validation.
         }
       }
     }
@@ -653,6 +665,7 @@ export function createRequireAuth(
     // refused it), and the audit row's subject column is only meaningful
     // under this code.
     if (disallowedSubject !== null) code = "subject_not_allowed";
+    else if (admissionUnavailable) code = "admission_unavailable";
     else if (brainKeyTried && bearerTried) code = "invalid_credentials";
     else if (brainKeyTried) code = "invalid_brain_key";
     else if (bearerTried) code = "token_validation_failed";

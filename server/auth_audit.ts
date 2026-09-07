@@ -106,13 +106,15 @@ const pool: Pool | null = !FORCE_DISABLED && DB_PASSWORD
 // 'subject_not_allowed' has no operator-facing string of its own (the
 // response stays the uniform 401 envelope): it marks a Bearer that passed
 // every cryptographic check but whose verified `sub` is not on the
-// OAUTH_ALLOWED_SUBJECTS allowlist — the one failure class where a real,
-// tenant-minted identity knocked and was refused, so the row carries that
-// verified subject for the operator to inspect.
+// active database admission list, so the row carries that verified subject
+// for the operator to inspect. 'admission_unavailable' instead marks a failed
+// admission lookup after crypto succeeds. It carries no subject or DB error
+// detail and uses the existing short-horizon operational-denial retention.
 export type AuthFailureReason =
   | "invalid_brain_key"
   | "token_validation_failed"
   | "subject_not_allowed"
+  | "admission_unavailable"
   | "invalid_credentials"
   | "missing_credentials";
 

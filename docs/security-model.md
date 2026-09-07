@@ -115,18 +115,21 @@ dumps can still read it.
   cryptographic check passes, the verified `sub` must appear on the
   `oauth_auth.allowed_subject` table as an active row or the request is rejected
   — with the same uniform 401 as any other failure externally, and reason
-  `subject_not_allowed` plus the verified subject on the audit row internally.
-  The list fails **closed**: with the OAuth door enabled and no active admission
-  rows, every Bearer is rejected (the boot log warns loudly). This exists
-  because "the tenant minted this token" and "the operator admits this account"
-  are different questions: an IdP-side misconfiguration — an
-  accidentally-enabled social connection, an unintended signup flow — mints
-  perfectly valid tokens for accounts the operator never meant to admit, and
-  tenant configuration must not be the only gate. Every request re-reads
-  admission and revocation from the database. The operator-only `subject-admin`
-  CLI changes admission using a dedicated role; the runtime cannot enroll
-  subjects. Legacy environment lists never provide a fallback. See
-  [migration and administration](oauth-subjects.md).
+  `subject_not_allowed` plus the verified subject on the audit row internally. A
+  lookup error also returns that same 401, but enqueues `admission_unavailable`
+  with no subject or database error details so operators can distinguish storage
+  failures from bad tokens. Audit delivery remains best-effort; a database-wide
+  outage can prevent the event from being stored. The list fails **closed**:
+  with the OAuth door enabled and no active admission rows, every Bearer is
+  rejected (the boot log warns loudly). This exists because "the tenant minted
+  this token" and "the operator admits this account" are different questions: an
+  IdP-side misconfiguration — an accidentally-enabled social connection, an
+  unintended signup flow — mints perfectly valid tokens for accounts the
+  operator never meant to admit, and tenant configuration must not be the only
+  gate. Every request re-reads admission and revocation from the database. The
+  operator-only `subject-admin` CLI changes admission using a dedicated role;
+  the runtime cannot enroll subjects. Legacy environment lists never provide a
+  fallback. See [migration and administration](oauth-subjects.md).
 - A boot-time JWKS reachability probe (with an explicit wall-clock timeout that
   also caps every later refresh) surfaces a typo'd JWKS URI at startup rather
   than at the first attacker request.
@@ -165,17 +168,17 @@ dumps can still read it.
 - **Audit retention keys on verified identity.** Rows naming a real,
   tenant-minted identity keep 365 days: every allowed row, plus
   `subject_not_allowed` denials (which verified identity knocked and was refused
-  — the question an incident review asks months later). Anonymous denials
-  (scanner noise, credential fumbles) keep 30 days, matched to the raw access
-  log so a 401 and the request that produced it age out together. The long
-  horizon is identity- and time-bounded, not size-bounded: those rows require a
-  Bearer the tenant actually minted — which bounds **who** can grow the table,
-  not how many rows a single credential can generate — so growth tracks
-  legitimate use, an accepted storage trade-off. A stolen credential inflating
-  it is loud in the very table it inflates (and in the edge burst alerts), and
-  the horizon is a one-line operator lever in `db/summarize_auth_events.sql`.
-  Only server-verified identity lands in the table — never as-presented
-  credentials or header values.
+  — the question an incident review asks months later). Other denials (scanner
+  noise, credential fumbles, admission lookup errors) keep 30 days, matched to
+  the raw access log so a 401 and the request that produced it age out together.
+  The long horizon is identity- and time-bounded, not size-bounded: those rows
+  require a Bearer the tenant actually minted — which bounds **who** can grow
+  the table, not how many rows a single credential can generate — so growth
+  tracks legitimate use, an accepted storage trade-off. A stolen credential
+  inflating it is loud in the very table it inflates (and in the edge burst
+  alerts), and the horizon is a one-line operator lever in
+  `db/summarize_auth_events.sql`. Only server-verified identity lands in the
+  table — never as-presented credentials or header values.
 - Captured content is hard-capped (100,000 UTF-8 bytes) on both
   `capture_thought` and `session_capture`; the REST gateway enforces the
   identical cap via the same shared schema module. Both REST and the MCP

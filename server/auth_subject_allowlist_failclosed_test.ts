@@ -1,13 +1,7 @@
-// Tests for the OAUTH_ALLOWED_SUBJECTS FAIL-CLOSED posture: OAuth door
-// enabled, allowlist left unset. Companion to auth_subject_allowlist_test.ts
-// (non-empty allowlist) — split across files because config.ts is read once
-// per module load, so each env state needs its own test file.
-//
-// The property under test: an unset/empty allowlist means NO Bearer token is
-// accepted, however valid — misconfiguration denies rather than allows — while
-// the x-brain-key door on a mixed deployment keeps working, so the failure
-// mode of "operator upgraded and forgot the new var" is a scoped OAuth outage
-// plus a loud boot warning, not a silently-open door.
+// The default middleware has no injected database admission lookup, so even a
+// valid Bearer must fail closed. The static-key door on a mixed deployment
+// still works. Empty/revoked database rows are tested separately by
+// oauth_subjects_db_smoke.ts; this file pins missing-wiring behavior.
 
 import { assertEquals } from "jsr:@std/assert@1";
 import {
@@ -34,7 +28,7 @@ const TEST_ENV = {
 };
 
 Deno.test(
-  "requireAuth fails closed with no OAUTH_ALLOWED_SUBJECTS",
+  "requireAuth fails closed without an injected admission lookup",
   withEnv([], TEST_ENV, runFailClosedAllowlistTest),
 );
 
@@ -50,7 +44,7 @@ async function runFailClosedAllowlistTest(t: Deno.TestContext): Promise<void> {
 
   try {
     await t.step(
-      "fully valid Bearer → 401 (empty allowlist admits nobody)",
+      "fully valid Bearer → 401 (missing admission lookup)",
       async () => {
         const res = await app.request("/", {
           headers: {
