@@ -321,8 +321,10 @@ allowlist are two different layers, and you want both.**
 - The app layer is what makes a single dashboard toggle survivable. Tenant
   configuration is mutable, invisible to your repo, outside your change control,
   and — as the social-connection row shows — easy to hold a wrong mental model
-  about. A fail-closed allowlist in code you version-control turns "the tenant
-  is misconfigured" from a breach into a log line.
+  about. The version-controlled verifier checks the operator-managed
+  `oauth_auth.allowed_subject` table on every request. This fail-closed
+  admission check turns "the tenant is misconfigured" into a denied request with
+  a best-effort audit event.
 
 Two smaller dashboard truths, same spirit, worth internalizing on the way out:
 
