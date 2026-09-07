@@ -108,7 +108,7 @@ docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/08-access-tokens.sql
 docker compose --env-file .env exec -T postgres \
-  psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
+  psql -X --single-transaction -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/13-oauth-subjects.sql
 docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \

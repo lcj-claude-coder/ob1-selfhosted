@@ -203,64 +203,85 @@ older, update the pinned pgvector image/package and run
 
 Run this as one block. The subshell's `set -e` makes every next step conditional
 on the previous one: a build failure leaves the current MCP serving, while any
-post-stop failure exits before `up` and leaves MCP quiesced for diagnosis.
+post-stop failure exits before the MCP restart and leaves it quiesced for
+diagnosis. The block uses Python 3 to detect OAuth from the rendered MCP
+configuration. An OAuth-off deployment skips import and verification; an
+OAuth-enabled deployment must complete them. For later upgrades after legacy env
+removal, omit only the `import-env` command, still list and verify
+active/revoked admission. If enabling OAuth without a legacy list, enroll the
+intended subjects with `subject-admin allow` first and follow that same
+list/verify path.
 
 ```bash
 (
-set -e
+set -eo pipefail
+# Inspect the rendered MCP settings without printing configuration values.
+# Python 3 reads JSON on stdin; only the yes/no result leaves this pipeline.
+oauth_enabled="$(docker compose --env-file .env config --format json | python3 -c '
+import json, sys
+env = json.load(sys.stdin)["services"]["mcp"]["environment"]
+print("yes" if any(env.get(k) for k in ("AUTH0_ISSUER", "AUTH0_JWKS_URI", "AUTH0_AUDIENCE")) else "no")
+')"
 # Build the replacement while the current MCP is still serving. Migration 11
 # is intentionally incompatible with pre-1.24 recapture SQL, so quiesce MCP
 # before replaying the database files and leave it stopped on any SQL failure.
-docker compose build mcp
+docker compose --env-file .env build mcp subject-admin
 # 1.25.0+: after setting OPENBRAIN_AUTH_ROLLUP_PASSWORD in .env, provision the
 # dedicated role before replaying 02-observability.sql, which now grants to it.
 bash ../../scripts/upgrade-enable-auth-rollup-role.sh .
-docker compose stop mcp
+docker compose --env-file .env stop mcp
 # 1.20.0+: converges mcp_auth_events to the allowed+denied audit shape in
 # place (idempotent). The server's boot probe refuses to start against the
 # old denied-only shape, so skipping this step turns the container roll
 # below into a loud restart loop rather than a silently dead audit trail.
-docker compose exec -T postgres \
+docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/02-observability.sql
-docker compose exec -T postgres \
+docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/05-hybrid-search.sql
-docker compose exec -T postgres \
+docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/06-spaces.sql
-docker compose exec -T postgres \
+docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/07-metadata-degradation.sql
 # After setting OPENBRAIN_TOKEN_ADMIN_PASSWORD in .env:
-bash ../../scripts/upgrade-enable-token-admin-role.sh
-docker compose exec -T postgres \
+COMPOSE_DIR="$PWD" bash ../../scripts/upgrade-enable-token-admin-role.sh
+docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/08-access-tokens.sql
-docker compose exec -T postgres \
+docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/09-retire-corpus-funnel.sql
-docker compose exec -T postgres \
+docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/10-thought-mutations.sql
-docker compose exec -T postgres \
+docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/11-session-update-grants.sql
-docker compose exec -T postgres \
+docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/12-auth-audit-grants.sql
-docker compose exec -T postgres \
-  psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
+docker compose --env-file .env exec -T postgres \
+  psql -X --single-transaction -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/13-oauth-subjects.sql
-docker compose exec -T postgres \
+docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/03-grants-assertion.sql
 # The Compose-backed summary reads its credential inside this service. Recreate
 # Postgres once so the newly-added environment value reaches the container;
 # the named data volume is preserved.
-docker compose up -d --no-deps --force-recreate --wait postgres
-# If OAuth is enabled, complete docs/oauth-subjects.md import/enrollment first.
-docker compose up -d --no-deps mcp
+docker compose --env-file .env up -d --no-deps --force-recreate --wait postgres
+if [ "$oauth_enabled" = yes ]; then
+  # First upgrade to database admission; later upgrades omit only import-env.
+  docker compose --env-file .env --profile tools run --rm subject-admin import-env --json
+  docker compose --env-file .env --profile tools run --rm subject-admin list --json
+  # Compare exact subjects/kinds and revocations, then remove both legacy env lists.
+  read -r -p 'Inventory verified and legacy env lists removed? Type verified: ' admission_review
+  test "$admission_review" = verified
+fi
+docker compose --env-file .env up -d --no-deps mcp
 )
 ```
 

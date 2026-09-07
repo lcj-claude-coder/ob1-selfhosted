@@ -458,7 +458,7 @@ docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postg
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/10-thought-mutations.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/11-session-update-grants.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/12-auth-audit-grants.sql
-docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/13-oauth-subjects.sql
+docker compose --env-file .env exec -T postgres psql -X --single-transaction -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/13-oauth-subjects.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/03-grants-assertion.sql
 # First upgrade to database admission: import while MCP is still stopped.
 docker compose --env-file .env --profile tools run --rm subject-admin import-env --json
@@ -571,7 +571,7 @@ A non-zero exit means a completed-catalog invariant failed. Prefer a targeted
 fix (e.g. `REVOKE DELETE ON public.thoughts FROM openbrain_app;`). To re-sync
 wholesale on 1.25.0+, provision `openbrain_auth_rollup` first with the helper
 used in the upgrade block above, then re-apply `01-schema.sql` →
-`02-observability.sql`, apply pending numbered migrations `04` through `12`, and
+`02-observability.sql`, apply pending numbered migrations `04` through `13`, and
 run `03-grants-assertion.sql` **last** — never `01` alone, since its REVOKE-all
 block strips observability grants until `02` restores them.
 
@@ -586,8 +586,9 @@ This OAuth-only deployment has no `MCP_ACCESS_KEY` to rotate. Rotate interactive
 client secrets in the provider and re-paste them into the hosted connector.
 Rotate each M2M secret in the provider and the corresponding agent secret store,
 verify the new credential, then revoke the old one; nothing in this stack stores
-either secret. Already-issued JWTs remain valid until expiration because the
-server performs local verification rather than introspection.
+either secret. Secret rotation alone leaves already-issued JWTs usable until
+expiration. Use `subject-admin revoke` for immediate subject-wide rejection on
+the next request; individual JWTs have no per-token introspection/revocation.
 
 ## Database-backed OAuth admission
 
