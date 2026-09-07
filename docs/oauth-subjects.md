@@ -18,13 +18,17 @@ state.
 
 ## Commands
 
-After provisioning the administrator below, run from the deployment directory:
+After provisioning the administrator below, run from the deployment directory.
+Keep `--env-file .env` on every Compose invocation: when `COMPOSE_FILE` selects
+a base file in another directory, a bare command can inherit that directory's
+`.env`, including its admitted subjects. `COMPOSE_DIR="$PWD"` similarly pins the
+provisioning helper to the deployment being administered.
 
 ```bash
-docker compose --profile tools run --rm subject-admin allow 'issuer|operator' user 'Operator'
-docker compose --profile tools run --rm subject-admin allow 'worker@clients' service 'Scheduled worker'
-docker compose --profile tools run --rm subject-admin list --json
-docker compose --profile tools run --rm subject-admin revoke 'worker@clients'
+docker compose --env-file .env --profile tools run --rm subject-admin allow 'issuer|operator' user 'Operator'
+docker compose --env-file .env --profile tools run --rm subject-admin allow 'worker@clients' service 'Scheduled worker'
+docker compose --env-file .env --profile tools run --rm subject-admin list --json
+docker compose --env-file .env --profile tools run --rm subject-admin revoke 'worker@clients'
 ```
 
 Subjects are identities, never tokens or client secrets. Obtain and verify the
@@ -59,7 +63,7 @@ until the new server passes its smoke checks.
    For a local Compose database, run:
 
    ```bash
-   bash ../../scripts/upgrade-enable-token-admin-role.sh
+   COMPOSE_DIR="$PWD" bash ../../scripts/upgrade-enable-token-admin-role.sh
    ```
 
    For an external database, including the Qubes app→DB ConnectTCP path, run
@@ -79,7 +83,7 @@ until the new server passes its smoke checks.
    superuser (older databases must first apply the preceding migrations):
 
    ```bash
-   docker compose exec -T postgres psql -X -v ON_ERROR_STOP=1 \
+   docker compose --env-file .env exec -T postgres psql -X -v ON_ERROR_STOP=1 \
      --single-transaction -U postgres -d openbrain \
      -f /docker-entrypoint-initdb.d/13-oauth-subjects.sql \
      -f /docker-entrypoint-initdb.d/99-grants-assertion.sql
@@ -96,9 +100,9 @@ until the new server passes its smoke checks.
    starting the new server**:
 
    ```bash
-   docker compose build mcp subject-admin token-admin
-   docker compose --profile tools run --rm subject-admin import-env --json
-   docker compose --profile tools run --rm subject-admin list --json
+   docker compose --env-file .env build mcp subject-admin token-admin
+   docker compose --env-file .env --profile tools run --rm subject-admin import-env --json
+   docker compose --env-file .env --profile tools run --rm subject-admin list --json
    ```
 
    `import-env` reads `OAUTH_ALLOWED_SUBJECTS` and

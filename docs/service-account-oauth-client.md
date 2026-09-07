@@ -42,7 +42,7 @@ any token profile without `gty` needs an exact, operator-controlled subject
 mapping in the admission table:
 
 ```bash
-docker compose --profile tools run --rm subject-admin allow 'scheduled-capture-client' service 'Scheduled capture'
+docker compose --env-file .env --profile tools run --rm subject-admin allow 'scheduled-capture-client' service 'Scheduled capture'
 ```
 
 Matching is exact and case-sensitive. The same row both admits the verified

@@ -30,8 +30,8 @@ administrator container:
 
 ```bash
 cd deploy/compose-local
-docker compose up -d
-docker compose --profile tools run --rm token-admin create "laptop client"
+docker compose --env-file .env up -d
+docker compose --env-file .env --profile tools run --rm token-admin create "laptop client"
 ```
 
 The final command prints the token once. Copy it directly into the client's
@@ -53,13 +53,13 @@ present in the long-running MCP container:
 
 ```bash
 # Create another independently revocable client credential.
-docker compose --profile tools run --rm token-admin create "backup agent"
+docker compose --env-file .env --profile tools run --rm token-admin create "backup agent"
 
 # List prefix, state, label, and timestamps. This never reveals a token/hash.
-docker compose --profile tools run --rm token-admin list
+docker compose --env-file .env --profile tools run --rm token-admin list
 
 # Revoke by the public prefix shown by create/list.
-docker compose --profile tools run --rm token-admin revoke ob1_AAAAAAAA
+docker compose --env-file .env --profile tools run --rm token-admin revoke ob1_AAAAAAAA
 ```
 
 `--json` is available for automation. Be especially careful with
@@ -79,7 +79,7 @@ issuing one native token per client, update and smoke-test each client, then
 remove `MCP_ACCESS_KEY` from `.env` and recreate the MCP service:
 
 ```bash
-docker compose up -d --force-recreate mcp
+docker compose --env-file .env up -d --force-recreate mcp
 ```
 
 The static key cannot be revoked through the token table. Removing it from the
@@ -103,19 +103,19 @@ writes and take a verified backup, then set `OPENBRAIN_TOKEN_ADMIN_PASSWORD` in
 
 ```bash
 cd deploy/compose-local
-bash ../../scripts/upgrade-enable-token-admin-role.sh
-docker compose exec -T postgres \
+COMPOSE_DIR="$PWD" bash ../../scripts/upgrade-enable-token-admin-role.sh
+docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/08-access-tokens.sql
-docker compose exec -T postgres \
+docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/13-oauth-subjects.sql
-docker compose exec -T postgres \
+docker compose --env-file .env exec -T postgres \
   psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/03-grants-assertion.sql
-docker compose build mcp token-admin
+docker compose --env-file .env build mcp token-admin
 # If OAuth is enabled, complete docs/oauth-subjects.md import/enrollment first.
-docker compose up -d --no-deps mcp
+docker compose --env-file .env up -d --no-deps mcp
 ```
 
 Migration 08 is required by this server version even when native tokens are
