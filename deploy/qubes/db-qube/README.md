@@ -158,6 +158,7 @@ sudo -u postgres psql -d openbrain -c "CREATE EXTENSION IF NOT EXISTS vector;"
 #   db/11-session-update-grants.sql
 #   db/12-auth-audit-grants.sql
 #   db/13-oauth-subjects.sql
+#   db/14-native-token-principals.sql
 #   db/03-grants-assertion.sql  # always last
 ```
 
@@ -223,11 +224,12 @@ Pushover/ntfy worker are documented in
 [Metadata degradation monitoring](../../../docs/metadata-degradation-monitoring.md).
 
 Then apply [`db/08-access-tokens.sql`](../../../db/08-access-tokens.sql) as the
-database owner, then run `db/03-grants-assertion.sql` last. The server catalog
-probe requires this schema, but the Qubes app remains OAuth-only: it does not
-enable native token verification, and the dedicated administrator role can stay
-`NOLOGIN`. See
-[Native access tokens](../../../docs/native-access-tokens.md#existing-database-upgrade).
+database owner, followed by subsequent migrations including 13 and 14, then
+`db/03-grants-assertion.sql` last. Version 1.27.0 requires the per-token
+principal schema even when native authentication is off. Credential
+administration uses the restricted tools role over the existing ConnectTCP/HBA
+path; see
+[Native access tokens](../../../docs/native-access-tokens.md#split-qubes-deployment).
 
 Server 1.25.0 adds the `openbrain_auth_rollup` login. On a fresh cluster, create
 it from the exact definition in `db/00-roles.sh`; on an existing split install,

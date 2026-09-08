@@ -270,8 +270,22 @@ export async function probeDbAtBoot(
            to_regclass('native_auth.access_token') IS NOT NULL
              AND to_regclass('native_auth.access_token_id_seq') IS NOT NULL
              AND to_regprocedure(
-               'native_auth.register_access_token(text,bytea,text)'
+               'native_auth.register_access_token(text,bytea,text,text)'
              ) IS NOT NULL
+             AND to_regprocedure(
+               'native_auth.register_access_token(text,bytea,text)'
+             ) IS NULL
+             AND EXISTS (
+               SELECT 1 FROM pg_attribute
+               WHERE attrelid = to_regclass('native_auth.access_token')
+                 AND attname = 'principal' AND atttypid = 'text'::regtype
+                 AND NOT attisdropped
+             )
+             AND EXISTS (
+               SELECT 1 FROM pg_constraint
+               WHERE conrelid = to_regclass('native_auth.access_token')
+                 AND conname = 'access_token_principal_shape' AND convalidated
+             )
              AND to_regprocedure(
                'native_auth.revoke_access_token(text)'
              ) IS NOT NULL,
@@ -662,8 +676,19 @@ export async function probeDbAtBoot(
       if (!hasNativeAccessTokenSchema) {
         throw new RequiredSchemaError(
           `[db] Postgres at ${target} is missing native access-token schema. ` +
-            `Apply db/08-access-tokens.sql as the database owner, then run ` +
+            `Apply db/08-access-tokens.sql and db/14-native-token-principals.sql as the database owner, then run ` +
             `db/03-grants-assertion.sql before starting this server version.`,
+        );
+      }
+      // Validate every runtime lookup column even while native tokens are off.
+      // A successful catalog probe alone does not prove column read grants.
+      try {
+        await client.queryArray(
+          "SELECT prefix, token_hash, label, principal, revoked_at FROM native_auth.access_token LIMIT 0",
+        );
+      } catch {
+        throw new RequiredSchemaError(
+          "[db] Native-token verification columns are unreadable. Apply db/14-native-token-principals.sql and db/03-grants-assertion.sql before starting this server version.",
         );
       }
       // Required regardless of OBS_AUTH_EVENTS_ENABLED — like the native-token

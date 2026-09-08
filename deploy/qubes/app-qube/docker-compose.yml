@@ -34,7 +34,7 @@
 #
 # Network lockdown: mcp has NO network-facing listener. It publishes on
 # loopback only; the ingress qube reaches it through a host-side forwarder +
-# qubes.ConnectTCP, with dom0 policy gating the channel and mcp's OAuth door
+# qubes.ConnectTCP, with dom0 policy gating the channel and mcp's auth middleware
 # authenticating every request. See README.md § Ingress→app transport.
 #
 # The deployed posture runs this compose project under a ROOTLESS dockerd
@@ -115,9 +115,11 @@ services:
       # policy (or uses the uncategorized stub). Leave off until the primary
       # endpoint is verified reachable + safe.
       ENABLE_PRIMARY_EXTRACTION: ${ENABLE_PRIMARY_EXTRACTION:-}
-      # OAuth-only deployment: pin native-token verification off and omit
-      # MCP_ACCESS_KEY, so no x-brain-key can be used against this public install.
-      ENABLE_NATIVE_TOKENS: "false"
+      # Native tokens are opt-in after migration and ingress confinement have
+      # been verified. The trusted marker cannot be disabled by .env; the app
+      # remains loopback-only behind the ingress ConnectTCP route.
+      ENABLE_NATIVE_TOKENS: ${ENABLE_NATIVE_TOKENS:-false}
+      REQUIRE_TAILNET_TOKEN_MARKER: "true"
       #
       # ENABLE_REST_API is DELIBERATELY not set here: the REST gateway
       # (/api/v1) is a docker-compose-install feature and this deployment's
@@ -125,10 +127,10 @@ services:
       # application surface it exposes. Unset means the router is never
       # mounted (server default is off). Do not add it.
       CITATION_BASE_URL: ${CITATION_BASE_URL:-https://openbrain.local/thoughts}
-      # REQUIRED — the only auth door here. Compose fails fast if any is unset.
-      AUTH0_ISSUER: ${AUTH0_ISSUER:?set AUTH0_ISSUER (Qubes deployment is OAuth-only)}
-      AUTH0_JWKS_URI: ${AUTH0_JWKS_URI:?set AUTH0_JWKS_URI (Qubes deployment is OAuth-only)}
-      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:?set AUTH0_AUDIENCE (Qubes deployment is OAuth-only)}
+      # REQUIRED — the public branch always uses OAuth.
+      AUTH0_ISSUER: ${AUTH0_ISSUER:?set AUTH0_ISSUER (public branch requires OAuth)}
+      AUTH0_JWKS_URI: ${AUTH0_JWKS_URI:?set AUTH0_JWKS_URI (public branch requires OAuth)}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:?set AUTH0_AUDIENCE (public branch requires OAuth)}
       # Transition-release validation/warning only; database rows govern access.
       # Run subject-admin import-env before first startup, then remove both lists.
       OAUTH_ALLOWED_SUBJECTS: ${OAUTH_ALLOWED_SUBJECTS:-}

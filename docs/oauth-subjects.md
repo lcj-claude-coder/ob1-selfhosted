@@ -59,6 +59,11 @@ server image and operator configuration, take and verify a backup, and perform
 the following during a deployment window. Keep admission changes frozen until
 the new server passes its smoke checks.
 
+Current 1.27.0 upgrades also require
+[migration 14](native-access-tokens.md#existing-database-upgrade), even with
+native tokens disabled. The sequence below includes it before the final grants
+assertion; previously admitted OAuth subjects remain unchanged.
+
 1. Put a distinct `OPENBRAIN_TOKEN_ADMIN_PASSWORD` in the deployment's
    owner-only `.env`. It is used only by the tools profile. The role is
    `NOLOGIN` by default until explicitly provisioned. For an external database,
@@ -84,22 +89,25 @@ the new server passes its smoke checks.
    one transaction. Password values are passed through environment variables,
    never command arguments. It does not install or reload `pg_hba.conf`.
 
-2. Apply migration 13 and the current grants assertion together as a PostgreSQL
-   superuser (older databases must first apply the preceding migrations):
+2. Apply migrations 13 and 14 and the current grants assertion together as a
+   PostgreSQL superuser (older databases must first apply the preceding
+   migrations):
 
    ```bash
    docker compose --env-file .env exec -T postgres psql -X -v ON_ERROR_STOP=1 \
      --single-transaction -U postgres -d openbrain \
      -f /docker-entrypoint-initdb.d/13-oauth-subjects.sql \
+     -f /docker-entrypoint-initdb.d/14-native-token-principals.sql \
      -f /docker-entrypoint-initdb.d/99-grants-assertion.sql
    ```
 
    Ensure the running database container has the new read-only migration mount
-   before using these paths. Alternatively stream both checked-out files through
-   `psql --single-transaction`. On Qubes, use the existing
+   before using these paths. Alternatively stream all three checked-out files
+   through `psql --single-transaction`. On Qubes, use the existing
    [native psql upgrade route](../deploy/qubes/app-qube/README.md#upgrading-an-existing-deployment)
-   over ConnectTCP, with `-f` paths to the checkout's `db/13-oauth-subjects.sql`
-   and `db/03-grants-assertion.sql`.
+   over ConnectTCP, with `-f` paths to the checkout's
+   `db/13-oauth-subjects.sql`, `db/14-native-token-principals.sql` and
+   `db/03-grants-assertion.sql`.
 
 3. Build the tools with the reviewed source and import the legacy lists **before
    starting the new server**:
@@ -155,17 +163,22 @@ app→DB dom0 policy; no new qrexec channel or network listener is needed. Verif
 the admin can list subjects in `openbrain`, and that connecting to the
 `postgres` maintenance database as that role fails with no HBA entry. Keep the
 role `NOLOGIN` until its credential and HBA setup are complete. Enabling the
-admin login does not enable native-token HTTP authentication: the Qubes server
-remains `ENABLE_NATIVE_TOKENS=false`.
+admin login does not enable native-token HTTP authentication. The Qubes server
+defaults to `ENABLE_NATIVE_TOKENS=false`; private tailnet use is a separate
+[opt-in after migration 14 and verified ingress confinement](native-access-tokens.md#split-qubes-deployment).
+The public Funnel branch remains OAuth-only.
 
 ### Rollback and restore
 
 A failed migration transaction leaves the existing schema intact. Migration 13
-is additive and may remain present during an application rollback. Restore the
-previous server image and its reviewed environment together. A stale legacy
-allowlist can undo revocations: if admission changed after rollout, reconcile
-that previous allowlist with the **current active database rows** before
-restarting the older server. Do not blindly restore a pre-revocation snapshot.
+is additive and may remain present during an application rollback. If migration
+14 has also been applied, the 1.26.0 server cannot boot until its
+[token registration contract is restored](native-access-tokens.md#rollback).
+Restore the previous server image and its reviewed environment together. A stale
+legacy allowlist can undo revocations: if admission changed after rollout,
+reconcile that previous allowlist with the **current active database rows**
+before restarting the older server. Do not blindly restore a pre-revocation
+snapshot.
 
 Revoke the new administrator's login
 (`ALTER ROLE openbrain_token_admin NOLOGIN`) and remove its two HBA entries if

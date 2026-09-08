@@ -10,7 +10,6 @@ const TOKEN = `ob1_AAECAwQF_${"s".repeat(43)}`;
 const TEST_ENV = {
   DB_PASSWORD: "test-password",
   ENABLE_NATIVE_TOKENS: "true",
-  MCP_ACCESS_KEY_PRINCIPAL: "local-operator",
   OBS_AUTH_EVENTS_ENABLED: "false",
   METADATA_FALLBACK_POLICY: "off",
 };
@@ -23,7 +22,9 @@ async function testNativeTokenAuth(t: Deno.TestContext): Promise<void> {
     const middleware = createRequireAuth((presented) => {
       lookups++;
       return Promise.resolve(
-        active && presented === TOKEN ? { label: "nightly agent" } : null,
+        active && presented === TOKEN
+          ? { label: "nightly agent", principal: "native:nightly" }
+          : null,
       );
     });
     const app = makeAuthTestApp<{ Variables: AppVariables }>(
@@ -45,7 +46,7 @@ async function testNativeTokenAuth(t: Deno.TestContext): Promise<void> {
         assertEquals(response.status, 200);
         assertEquals(await response.json(), {
           door: "tailnet",
-          sub: null,
+          sub: "native:nightly",
           tokenLabel: "nightly agent",
         });
       },
@@ -77,7 +78,9 @@ async function testNativeTokenAuth(t: Deno.TestContext): Promise<void> {
 
     await t.step("malformed verifier identity fails closed", async () => {
       const malformedApp = makeAuthTestApp<{ Variables: AppVariables }>(
-        createRequireAuth(() => Promise.resolve({ label: "bad\nlabel" })),
+        createRequireAuth(() =>
+          Promise.resolve({ label: "bad\nlabel", principal: null })
+        ),
       );
       const response = await malformedApp.request("/", {
         headers: { "x-brain-key": TOKEN },

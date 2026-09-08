@@ -52,4 +52,4 @@ COMMIT;
 SQL
 
 echo "[upgrade-token-admin] LOGIN, password and restricted privilege flags reconciled"
-echo "[upgrade-token-admin] apply migrations 08 and 13 plus the final grants assertion; install the role-scoped HBA entries on a split database"
+echo "[upgrade-token-admin] apply migrations 08, 13 and 14 plus the final grants assertion; install the role-scoped HBA entries on a split database"

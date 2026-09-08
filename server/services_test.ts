@@ -225,7 +225,7 @@ await withEnv([], TEST_ENV, async () => {
             content: "automated private capture",
             auth: {
               door: "tailnet",
-              sub: null,
+              sub: "native:nightly",
               tokenLabel: "nightly agent",
             },
             via: "mcp",
@@ -233,7 +233,7 @@ await withEnv([], TEST_ENV, async () => {
           makeDeps(),
         );
         assertEquals(out.metadata.door, "tailnet");
-        assertEquals(out.metadata.sub, null);
+        assertEquals(out.metadata.sub, "native:nightly");
         assertEquals(out.metadata.token_label, "nightly agent");
       },
     );
@@ -1067,7 +1067,7 @@ await withEnv([], TEST_ENV, async () => {
             tomlText: 'title = "native token session"\nstatus = "active"',
             auth: {
               door: "tailnet",
-              sub: null,
+              sub: "native:nightly",
               tokenLabel: "nightly agent",
             },
           },

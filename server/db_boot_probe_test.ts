@@ -95,6 +95,7 @@ function bootQueryHandler(
   notificationStateExists = true,
 ): QueryHandler {
   return (sql) => {
+    if (sql.includes("FROM native_auth.access_token")) return { rows: [] };
     if (sql.includes("FROM oauth_auth.allowed_subject")) return { rows: [] };
     if (sql.includes("oauth_auth.allowed_subject")) return { rows: [[true]] };
     if (sql.includes("to_regclass")) {
@@ -116,7 +117,7 @@ Deno.test("probeDbAtBoot: success path validates connectivity and hybrid schema"
 
   await probeDbAtBoot(fakePool, "db:5432");
   const queries = client.queryArrayCalls.map(({ sql }) => sql);
-  assertEquals(queries.length, 6);
+  assertEquals(queries.length, 7);
   assertEquals(queries[0], "SELECT 1");
   assert(queries[1].includes("idx_thoughts_content_tsv"));
   assert(queries[1].includes("idx_thoughts_content_trgm"));
@@ -167,10 +168,13 @@ Deno.test("probeDbAtBoot: success path validates connectivity and hybrid schema"
       "metadata_degradation_failed_channels_shape",
     ),
   );
-  assert(queries[2].includes("oauth_auth.allowed_subject"));
-  assert(queries[3].includes("FROM oauth_auth.allowed_subject"));
-  assert(queries[4].includes("metadata_degradation_notification_state"));
-  assert(queries[5].includes("memory_scope.workspace"));
+  assert(
+    queries[2].includes("principal, revoked_at FROM native_auth.access_token"),
+  );
+  assert(queries[3].includes("oauth_auth.allowed_subject"));
+  assert(queries[4].includes("FROM oauth_auth.allowed_subject"));
+  assert(queries[5].includes("metadata_degradation_notification_state"));
+  assert(queries[6].includes("memory_scope.workspace"));
   assertEquals(client.releaseCalls, 1);
 });
 
@@ -569,6 +573,7 @@ Deno.test("probeDbAtBoot: missing OAuth admission requires migration before star
 Deno.test("probeDbAtBoot: unreadable OAuth admission rejects with grant recovery guidance", async () => {
   const baseline = bootQueryHandler();
   const { pool, client } = makeFakePool((sql, args) => {
+    if (sql.includes("FROM native_auth.access_token")) return { rows: [] };
     if (sql.includes("FROM oauth_auth.allowed_subject")) {
       throw new Error("permission denied for table allowed_subject");
     }
@@ -585,4 +590,19 @@ Deno.test("probeDbAtBoot: unreadable OAuth admission rejects with grant recovery
   assertStringIncludes(error.message, "db/13-oauth-subjects.sql");
   assertStringIncludes(error.message, "db/03-grants-assertion.sql");
   assertEquals(client.releaseCalls, 1);
+});
+
+Deno.test("probeDbAtBoot: unreadable native principal fails before serving", async () => {
+  const baseline = bootQueryHandler();
+  const { pool } = makeFakePool((sql) => {
+    if (sql.includes("FROM native_auth.access_token")) {
+      throw new Error("permission denied");
+    }
+    return baseline(sql, []);
+  });
+  const error = await assertRejects(
+    () => probeDbAtBoot(pool, "db:5432"),
+    Error,
+  );
+  assertStringIncludes(error.message, "db/14-native-token-principals.sql");
 });

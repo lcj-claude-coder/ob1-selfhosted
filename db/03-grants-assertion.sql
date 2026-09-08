@@ -852,7 +852,7 @@ DECLARE
   token_table oid := to_regclass('native_auth.access_token');
   token_sequence oid := to_regclass('native_auth.access_token_id_seq');
   register_fn oid := to_regprocedure(
-    'native_auth.register_access_token(text,bytea,text)'
+    'native_auth.register_access_token(text,bytea,text,text)'
   );
   revoke_fn oid := to_regprocedure(
     'native_auth.revoke_access_token(text)'
@@ -867,7 +867,10 @@ BEGIN
   IF token_table IS NULL OR token_sequence IS NULL
      OR register_fn IS NULL OR revoke_fn IS NULL OR admin_oid IS NULL THEN
     RAISE EXCEPTION
-      'grants assertion failed: native access-token schema, sequence, functions, or administrator role is missing; apply db/08-access-tokens.sql first.';
+      'grants assertion failed: native access-token schema, sequence, functions, or administrator role is missing; apply db/08-access-tokens.sql and db/14-native-token-principals.sql first.';
+  END IF;
+  IF to_regprocedure('native_auth.register_access_token(text,bytea,text)') IS NOT NULL THEN
+    RAISE EXCEPTION 'grants assertion failed: retired principal-less token registration still exists; apply db/14-native-token-principals.sql.';
   END IF;
 
   SELECT concat_ws(
@@ -999,6 +1002,7 @@ BEGIN
        has_column_privilege(app_oid, token_table, 'prefix', 'SELECT')
        AND has_column_privilege(app_oid, token_table, 'token_hash', 'SELECT')
        AND has_column_privilege(app_oid, token_table, 'label', 'SELECT')
+       AND has_column_privilege(app_oid, token_table, 'principal', 'SELECT')
        AND has_column_privilege(app_oid, token_table, 'revoked_at', 'SELECT')
      ) OR has_column_privilege(app_oid, token_table, 'id', 'SELECT')
        OR has_column_privilege(app_oid, token_table, 'created_at', 'SELECT')
@@ -1010,13 +1014,14 @@ BEGIN
          app_oid, token_table, 'INSERT, UPDATE, REFERENCES'
        ) THEN
     RAISE EXCEPTION
-      'grants assertion failed: openbrain_app must have SELECT only on the four native-token verification columns.';
+      'grants assertion failed: openbrain_app must have SELECT only on the five native-token verification columns.';
   END IF;
 
   IF NOT (
        has_column_privilege(admin_oid, token_table, 'id', 'SELECT')
        AND has_column_privilege(admin_oid, token_table, 'prefix', 'SELECT')
        AND has_column_privilege(admin_oid, token_table, 'label', 'SELECT')
+       AND has_column_privilege(admin_oid, token_table, 'principal', 'SELECT')
        AND has_column_privilege(admin_oid, token_table, 'created_at', 'SELECT')
        AND has_column_privilege(admin_oid, token_table, 'revoked_at', 'SELECT')
      ) OR has_column_privilege(admin_oid, token_table, 'token_hash', 'SELECT')
@@ -1099,7 +1104,8 @@ BEGIN
       'grants assertion failed: PUBLIC can access native token storage.';
   END IF;
 
-  IF NOT has_table_privilege(readonly_oid, token_table, 'SELECT')
+  IF has_any_column_privilege(readonly_oid, token_table, 'INSERT, UPDATE, REFERENCES')
+     OR NOT has_table_privilege(readonly_oid, token_table, 'SELECT')
      OR has_table_privilege(readonly_oid, token_table,
        'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
      OR NOT has_sequence_privilege(readonly_oid, token_sequence, 'SELECT')

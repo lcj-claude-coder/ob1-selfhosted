@@ -214,8 +214,8 @@ should have caught up, and the stamp file's mtime equals the boot time.
   (`qubes.ConnectTCP +8787 <ingress-qube> <app-qube> allow autostart=no`) gates
   the channel — see
   [the ingress→app hop](ingress-qube/README.md#the-ingressapp-hop-qubesconnecttcp).
-  mcp's app auth (OAuth Bearer JWT — the only auth door on this OAuth-only
-  deployment; no x-brain-key) still authenticates every request that arrives
+  mcp's app auth (OAuth Bearer JWT, or an explicitly enabled native token with
+  the trusted tailnet marker) still authenticates every request that arrives
   over it. An earlier revision published mcp on `0.0.0.0:8787` and scoped the
   wide bind with a Tailscale ACL grant + a `DOCKER-USER` host-firewall rule; the
   qrexec transport removed that listener class entirely.
@@ -339,3 +339,13 @@ that one line plus a Caddy reload (the rollback also needs the app-qube compose
 republished on `0.0.0.0` **and** an ingress-scoped `custom-input` accept on the
 app qube — see the
 [ingress README](ingress-qube/README.md#the-ingressapp-hop-qubesconnecttcp)).
+
+## Optional native tokens on the tailnet branch
+
+Server 1.27.0 adds stable native-token principals. Apply migration 14 after the
+prior schema migrations, keep the app listener loopback-only, and deploy the
+shared Caddyfile's public credential strip before enabling
+`ENABLE_NATIVE_TOKENS=true` on the app. Its Compose pins the trusted marker
+requirement. Public Funnel remains OAuth-only; the existing restricted
+`token-admin` tools container uses the app→DB ConnectTCP path. See the
+[rollout, branch matrix and rollback](../../docs/native-access-tokens.md#split-qubes-deployment).

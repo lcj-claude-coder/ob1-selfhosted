@@ -1,7 +1,7 @@
-// Native access-token lifecycle for deployments without an OIDC issuer.
+// Native access-token lifecycle, independent of an OIDC issuer.
 //
 // Plaintext tokens exist only in the caller that creates them. PostgreSQL
-// stores a fixed-length SHA-256 digest plus a short public prefix and label.
+// stores a fixed-length SHA-256 digest plus a public prefix, label and principal.
 // Authentication uses the prefix for one bounded lookup, then compares the
 // presented digest with the stored digest in constant time. Unknown prefixes
 // still perform the same digest comparison against a fixed dummy value.
@@ -9,6 +9,7 @@
 import type { Pool } from "postgres";
 import {
   isNativeTokenLabel,
+  isNativeTokenPrincipal,
   MAX_NATIVE_TOKEN_LABEL_LENGTH,
 } from "./auth_context.ts";
 import { constantTimeEqual } from "./constant_time.ts";
@@ -29,12 +30,14 @@ const UNKNOWN_TOKEN_HASH = new Uint8Array(TOKEN_HASH_BYTES);
 
 export type NativeTokenIdentity = {
   label: string;
+  principal: string | null;
 };
 
 export type AccessTokenMetadata = {
   id: string;
   prefix: string;
   label: string;
+  principal: string | null;
   created_at: string;
   revoked_at: string | null;
 };
@@ -76,6 +79,23 @@ export function normalizeAccessTokenLabel(value: string): string {
 function accessTokenLabelFromStore(value: unknown): string {
   if (!isNativeTokenLabel(value)) {
     throw new Error("token store returned an invalid label");
+  }
+  return value;
+}
+
+export function validateAccessTokenPrincipal(value: string): string {
+  if (!isNativeTokenPrincipal(value)) {
+    throw new Error(
+      "principal must be native:<id>, with 1-121 ASCII letters, digits, dots, underscores or hyphens; the id must start with a letter or digit",
+    );
+  }
+  return value;
+}
+
+function principalFromStore(value: unknown): string | null {
+  if (value === null) return null; // Pre-migration token: no personal access.
+  if (!isNativeTokenPrincipal(value)) {
+    throw new Error("token store returned an invalid principal");
   }
   return value;
 }
@@ -131,6 +151,7 @@ function timestamp(value: unknown): string {
 type AuthenticationRow = {
   token_hash: Uint8Array;
   label: string;
+  principal: string | null;
   revoked_at: Date | string | null;
 };
 
@@ -147,7 +168,7 @@ export async function authenticateAccessToken(
   const client = await getClient(pool);
   try {
     const result = await client.queryObject<AuthenticationRow>(
-      `SELECT token_hash, label, revoked_at
+      `SELECT token_hash, label, principal, revoked_at
        FROM native_auth.access_token
        WHERE prefix = $1`,
       [prefix],
@@ -160,10 +181,13 @@ export async function authenticateAccessToken(
     if (!matches || !row || row.revoked_at !== null) return null;
 
     try {
-      return { label: accessTokenLabelFromStore(row.label) };
+      return {
+        label: accessTokenLabelFromStore(row.label),
+        principal: principalFromStore(row.principal),
+      };
     } catch {
-      // A malformed label means the database invariant drifted. Never let it
-      // enter durable provenance; authentication fails closed.
+      // Malformed identity data means the database invariant drifted. Never
+      // let it enter provenance or scope; authentication fails closed.
       return null;
     }
   } finally {
@@ -175,6 +199,7 @@ type TokenMetadataRow = {
   id: bigint | number | string;
   prefix: string;
   label: string;
+  principal: string | null;
   created_at: Date | string;
   revoked_at?: Date | string | null;
 };
@@ -184,6 +209,7 @@ function metadataFromRow(row: TokenMetadataRow): AccessTokenMetadata {
     id: String(row.id),
     prefix: normalizeAccessTokenPrefix(row.prefix),
     label: accessTokenLabelFromStore(row.label),
+    principal: principalFromStore(row.principal),
     created_at: timestamp(row.created_at),
     revoked_at: row.revoked_at == null ? null : timestamp(row.revoked_at),
   };
@@ -192,17 +218,19 @@ function metadataFromRow(row: TokenMetadataRow): AccessTokenMetadata {
 export async function createAccessToken(
   pool: Pool,
   rawLabel: string,
+  rawPrincipal: string,
   randomBytes: RandomBytes = secureRandomBytes,
 ): Promise<CreatedAccessToken> {
   const label = normalizeAccessTokenLabel(rawLabel);
+  const principal = validateAccessTokenPrincipal(rawPrincipal);
   const { token, prefix } = generateAccessToken(randomBytes);
   const tokenHash = await hashAccessToken(token);
   const client = await getClient(pool);
   try {
     const result = await client.queryObject<TokenMetadataRow>(
-      `SELECT id, prefix, label, created_at
-       FROM native_auth.register_access_token($1, $2, $3)`,
-      [prefix, tokenHash, label],
+      `SELECT id, prefix, label, principal, created_at
+       FROM native_auth.register_access_token($1, $2, $3, $4)`,
+      [prefix, tokenHash, label, principal],
     );
     const row = result.rows[0];
     if (!row) throw new Error("token registration returned no row");
@@ -211,6 +239,7 @@ export async function createAccessToken(
       id: metadata.id,
       prefix: metadata.prefix,
       label: metadata.label,
+      principal: metadata.principal,
       created_at: metadata.created_at,
       token,
     };
@@ -225,7 +254,7 @@ export async function listAccessTokens(
   const client = await getClient(pool);
   try {
     const result = await client.queryObject<TokenMetadataRow>(
-      `SELECT id, prefix, label, created_at, revoked_at
+      `SELECT id, prefix, label, principal, created_at, revoked_at
        FROM native_auth.access_token
        ORDER BY created_at DESC, id DESC`,
     );
@@ -243,8 +272,9 @@ export async function revokeAccessToken(
   const client = await getClient(pool);
   try {
     const result = await client.queryObject<TokenMetadataRow>(
-      `SELECT id, prefix, label, created_at, revoked_at
-       FROM native_auth.revoke_access_token($1)`,
+      `SELECT revoked.*, token.principal
+       FROM native_auth.revoke_access_token($1) AS revoked
+       JOIN native_auth.access_token AS token ON token.prefix = revoked.prefix`,
       [prefix],
     );
     const row = result.rows[0];
