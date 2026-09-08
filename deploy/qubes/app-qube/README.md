@@ -354,13 +354,21 @@ version. Apply migrations before the roll, not with it.
    the current MCP is still serving. Then stop `mcp` and apply earlier pending
    migrations in ascending order, through 13. Finish with migration 14 and
    `db/03-grants-assertion.sql` in one transaction, **even with native tokens
-   disabled**. From the checkout root, using the existing administrator psql
-   connection over ConnectTCP:
+   disabled**. From the checkout root, load this deployment's owner-only `.env`
+   and explicitly select the database-superuser connection over ConnectTCP:
 
    ```bash
-   psql -X --single-transaction -v ON_ERROR_STOP=1 \
-     -f db/14-native-token-principals.sql \
-     -f db/03-grants-assertion.sql
+   (
+     cd deploy/qubes/app-qube || exit
+     . ./.env || exit
+     : "${DB_HOST:?set DB_HOST in .env}"
+     : "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+     env -i PATH="$PATH" PGPASSWORD="$POSTGRES_PASSWORD" \
+       psql -w -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "${POSTGRES_USER:-postgres}" \
+         -d "${POSTGRES_DB:-openbrain}" -X --single-transaction -v ON_ERROR_STOP=1 \
+         -f ../../../db/14-native-token-principals.sql \
+         -f ../../../db/03-grants-assertion.sql
+   )
    ```
 
    The assertion reads the completed catalog, so a partial migration or widened
