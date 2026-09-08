@@ -44,10 +44,12 @@ intervening work, subject to the verification rules below.
 Count **substantive user/assistant turns** for the current work session: one
 user request and the assistant's work responding to it, regardless of tool
 calls, progress messages, or automatic continuations. A turn is substantive when
-actual work happened on the machine, or the goal, decisions, blockers, or next
-actions changed. Pure greetings, thanks, and goodbyes neither advance the
-counter nor trigger a save. An assistant final response ends a turn; it does not
-necessarily end the work session.
+actual task work happened on the machine, or the goal, decisions, blockers, or
+next actions changed. Bookkeeping-only turns (lookups/status queries that change
+no session context, or explicit saves without new task work) do not advance the
+counter. Pure greetings, thanks, and goodbyes neither advance the counter nor
+trigger a save. An assistant final response ends a turn; it does not necessarily
+end the work session.
 
 - Save at the end of each of the first three substantive turns.
 - Then save every third substantive turn: **6, 9, 12, …**. Between checkpoints,
