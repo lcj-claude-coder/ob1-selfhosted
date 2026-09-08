@@ -1,8 +1,10 @@
 # Connecting Codex to an OAuth deployment
 
-The [tailnet/Funnel](../deploy/compose-tailnet/README.md) and
-[Qubes](../deploy/qubes/README.md) install paths are **OAuth-only** — native and
-static `x-brain-key` verification are disabled. The
+The public Funnel branch always requires OAuth. Single-host
+[Pattern B](../deploy/compose-tailnet/README.md) also uses OAuth on the tailnet;
+[split Qubes](../deploy/qubes/README.md) can optionally enable
+[native tokens](native-access-tokens.md) on its private branch. This guide
+covers the OAuth client path. The
 [compose-tailnet runbook](../deploy/compose-tailnet/README.md#connect-claudeai--claude-mobile)
 covers connecting **claude.ai / Claude mobile** (a confidential client,
 `client_id` + `client_secret` pasted into a custom connector). This doc covers
@@ -51,11 +53,11 @@ tailnet-connected Linux/WSL hosts.
   through Funnel. OAuth still terminates at the provider, and the server still
   validates issuer, audience, signature, and expiry — the tailnet path is not an
   auth bypass, just a different network route to the same door.
-- Header forwarding is transport behavior, not auth acceptance. Caddy forwards
-  `Authorization` (and `X-Brain-Key`) on both allowed branches; the **server**
-  decides which doors a deployment enables. An OAuth-only deployment leaves
-  `MCP_ACCESS_KEY` unset and sets `ENABLE_NATIVE_TOKENS=false`, so a forwarded
-  `X-Brain-Key` is ignored — see [security-model.md](security-model.md).
+- Caddy forwards `Authorization` on both allowed branches. Public Funnel strips
+  `X-Brain-Key` and the caller's tailnet marker; the private branch replaces
+  that marker. The server verifies credentials and requires the trusted marker
+  for native tokens on the split deployment — see
+  [security-model.md](security-model.md).
 - This does **not** authorize cloud-hosted Codex workers. Keep public cloud
   ingress disabled until the OAuth path and an automated source-range control
   are independently verified. If you ever do allowlist a cloud provider's

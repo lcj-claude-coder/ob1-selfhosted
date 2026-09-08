@@ -4,7 +4,7 @@
 // freshly initialized PostgreSQL container. It proves real deno-postgres BYTEA
 // decoding, role grants, hash-only storage, attribution, and immediate revoke.
 
-import { assert, assertEquals, assertMatch } from "@std/assert";
+import { assert, assertEquals, assertMatch, assertRejects } from "@std/assert";
 import { Pool } from "postgres";
 import {
   authenticateAccessToken,
@@ -51,14 +51,61 @@ function toHex(bytes: Uint8Array): string {
 
 const fixturePrefixes: string[] = [];
 try {
-  const created = await createAccessToken(tokenAdminPool, "CI driver smoke");
+  const created = await createAccessToken(
+    tokenAdminPool,
+    "CI driver smoke",
+    "native:driver",
+  );
   fixturePrefixes.push(created.prefix);
   assertMatch(created.token, /^ob1_[A-Za-z0-9_-]{8}_[A-Za-z0-9_-]{43}$/);
 
   const astralLabel = "😀".repeat(65);
-  const astral = await createAccessToken(tokenAdminPool, astralLabel);
+  const astral = await createAccessToken(
+    tokenAdminPool,
+    astralLabel,
+    "native:astral",
+  );
   fixturePrefixes.push(astral.prefix);
   assertEquals([...astral.label].length, 65);
+
+  // Exercise SQL directly so a caller bypassing CLI validation cannot mint an
+  // unowned token or impersonate an OAuth subject. NULL exists only for legacy
+  // rows; invalid non-null values must fail the database shape constraint.
+  const administrator = await tokenAdminPool.connect();
+  try {
+    for (
+      const principal of [
+        null,
+        "",
+        "auth0|user",
+        "native:",
+        "native:-start",
+        " native:agent",
+        "native:agent\n",
+        "native:agent\u0085",
+        `native:${"a".repeat(122)}`,
+      ]
+    ) {
+      await assertRejects(
+        () =>
+          administrator.queryArray(
+            "SELECT * FROM native_auth.register_access_token($1,$2,$3,$4)",
+            [
+              "ob1_BADPRINC",
+              new Uint8Array(32),
+              "invalid principal",
+              principal,
+            ],
+          ),
+        Error,
+        principal === null
+          ? "requires an explicit principal"
+          : "access_token_principal_shape",
+      );
+    }
+  } finally {
+    administrator.release();
+  }
 
   const postgres = await postgresPool.connect();
   try {
@@ -91,6 +138,7 @@ try {
   );
   const astralMetadata = inventory.find((row) => row.prefix === astral.prefix);
   assertEquals(standardMetadata?.label, "CI driver smoke");
+  assertEquals(standardMetadata?.principal, "native:driver");
   assertEquals(standardMetadata?.revoked_at, null);
   assertEquals(astralMetadata?.label, astralLabel);
   assertEquals(astralMetadata?.revoked_at, null);
@@ -98,13 +146,16 @@ try {
 
   assertEquals(await authenticateAccessToken(appPool, created.token), {
     label: "CI driver smoke",
+    principal: "native:driver",
   });
   assertEquals(await authenticateAccessToken(appPool, astral.token), {
     label: astralLabel,
+    principal: "native:astral",
   });
 
   const revoked = await revokeAccessToken(tokenAdminPool, created.prefix);
   assert(revoked?.revoked_at, "revoke must return its timestamp");
+  assertEquals(revoked.principal, "native:driver");
   assertEquals(await authenticateAccessToken(appPool, created.token), null);
   assertEquals(await revokeAccessToken(tokenAdminPool, created.prefix), null);
 

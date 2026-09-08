@@ -143,6 +143,11 @@ export const SHARED_FORWARDING_RULES: ForwardingRules = {
 };
 
 const PATTERN_B_PINS: DeploymentPolicy["pins"] = {
+  REQUIRE_TAILNET_TOKEN_MARKER: {
+    value: "true",
+    rationale:
+      "Public proxies must constrain any enabled key door to the tailnet branch.",
+  },
   ENABLE_NATIVE_TOKENS: {
     value: "false",
     rationale: "The public Pattern B door is OAuth-only.",
@@ -328,17 +333,24 @@ export const DOCUMENTED_DEPLOYMENTS: readonly DeploymentShape[] = [
           ENABLE_REST_API:
             "The split app qube exposes MCP only; its ingress contract has no REST route.",
           MCP_ACCESS_KEY:
-            "The split deployment is OAuth-only and carries no native/static credential.",
+            "The split deployment accepts optional native tokens, never a static key.",
           MCP_ACCESS_KEY_PRINCIPAL:
-            "The OAuth-only app qube has no native credential principal.",
+            "Native tokens have per-token principals; the static key is absent.",
         },
         pins: {
-          ENABLE_NATIVE_TOKENS: {
-            value: "false",
-            rationale: "The split app qube is OAuth-only.",
+          REQUIRE_TAILNET_TOKEN_MARKER: {
+            value: "true",
+            rationale:
+              "Only the trusted ingress tailnet branch may use native tokens.",
           },
         },
         expressionDifferences: {
+          ENABLE_NATIVE_TOKENS: {
+            baselineValue: "${ENABLE_NATIVE_TOKENS:-true}",
+            value: "${ENABLE_NATIVE_TOKENS:-false}",
+            rationale:
+              "Native tokens require an explicit post-migration opt-in on Qubes.",
+          },
           DB_HOST: {
             baselineValue: "${DB_HOST:-postgres}",
             value:
@@ -356,23 +368,23 @@ export const DOCUMENTED_DEPLOYMENTS: readonly DeploymentShape[] = [
           AUTH0_ISSUER: {
             baselineValue: "${AUTH0_ISSUER:-}",
             value:
-              "${AUTH0_ISSUER:?set AUTH0_ISSUER (Qubes deployment is OAuth-only)}",
+              "${AUTH0_ISSUER:?set AUTH0_ISSUER (public branch requires OAuth)}",
             rationale:
-              "OAuth is the split deployment's only authentication door.",
+              "The split deployment always requires OAuth on its public branch.",
           },
           AUTH0_JWKS_URI: {
             baselineValue: "${AUTH0_JWKS_URI:-}",
             value:
-              "${AUTH0_JWKS_URI:?set AUTH0_JWKS_URI (Qubes deployment is OAuth-only)}",
+              "${AUTH0_JWKS_URI:?set AUTH0_JWKS_URI (public branch requires OAuth)}",
             rationale:
-              "OAuth is the split deployment's only authentication door.",
+              "The split deployment always requires OAuth on its public branch.",
           },
           AUTH0_AUDIENCE: {
             baselineValue: "${AUTH0_AUDIENCE:-}",
             value:
-              "${AUTH0_AUDIENCE:?set AUTH0_AUDIENCE (Qubes deployment is OAuth-only)}",
+              "${AUTH0_AUDIENCE:?set AUTH0_AUDIENCE (public branch requires OAuth)}",
             rationale:
-              "OAuth is the split deployment's only authentication door.",
+              "The split deployment always requires OAuth on its public branch.",
           },
         },
       },

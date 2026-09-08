@@ -8,36 +8,33 @@ one-page view of the whole model is [`threat-model.md`](threat-model.md).
 
 ## Trust boundaries
 
-The system has **two auth doors, chosen per deployment** — typically one, though
-the local single-box install may run both (it's the only place that's intended;
-the boot log warns when both are on). `ENABLE_NATIVE_TOKENS` and the legacy
-`MCP_ACCESS_KEY` independently enable credential types on the local
-`x-brain-key` door; the three `AUTH0_*` vars enable the OAuth door. The server
-refuses to boot with neither door configured.
+The system supports native/static `x-brain-key` credentials and OAuth Bearer
+credentials. At least one must be configured. Local Compose defaults to native
+tokens; single-host Pattern B remains OAuth-only. Split Qubes can enable native
+tokens on its tailnet branch after migration and proxy verification. The public
+Funnel branch always requires OAuth and the Anthropic egress allowlist.
 
-**Local single-box install (`x-brain-key`).** The private door is intended for
-loopback/LAN (or your tailnet if you front it with `tailscale serve`). Its
-default credentials are labeled native tokens: 256-bit random secrets shown
-once, stored only as SHA-256 digests, looked up on every request, and revoked
-independently. The static shared key remains a migration bridge. Anyone who can
-reach the box and present any active credential can read/write registered
-workspace and project audiences — treat every token like a database password and
-your network ACLs as the firewall. Token labels are attribution, not per-user
-identity, so personal spaces fail closed unless the operator binds the
-deployment to one stable `MCP_ACCESS_KEY_PRINCIPAL`; every token holder then
-acts as that same principal. See
+**Local single-box install.** Native tokens contain 256-bit random secrets, are
+stored only as SHA-256 digests, and are checked on every request. Each has an
+explicit stable `native:<id>` principal for personal memory; labels identify
+writes independently of ownership. The static shared key remains supported, with
+`MCP_ACCESS_KEY_PRINCIPAL` applying only to that static credential. Older native
+tokens have no principal and fail closed for personal/sensitive scope. All
+authenticated holders still share registered workspace/project audiences. See
 [Native access tokens](native-access-tokens.md).
 
-**Funnel / Qubes (OAuth-only).** The static key is empty and native token
-verification is explicitly disabled — the server ignores every presented
-`x-brain-key`. Public Funnel callers must originate from Anthropic's published
-egress range `160.79.104.0/21`; private tailnet callers bypass that public
-matcher. Both paths must present a valid RS256 JWT with the configured issuer,
-audience, `exp`, and `sub`. The subject may represent an interactive user or a
-[client-credentials service account](service-account-oauth-client.md); identity
-rests entirely on OAuth tenant administration and credential hygiene. PostgreSQL
-RLS partitions `personal` rows by the verified `sub`; workspace/project
-audiences remain shared because this release has no membership ACL.
+**Funnel / Qubes.** Public requests first pass the `160.79.104.0/21` Anthropic
+IP allowlist, then verify an RS256 JWT with the configured issuer, audience,
+expiry and admitted subject. Caddy removes `X-Brain-Key` and any caller-supplied
+`X-OpenBrain-Tailnet` from that branch. On the private tailnet branch, OAuth
+continues to work; optionally enabled native tokens additionally require Caddy's
+replaced `X-OpenBrain-Tailnet: 1` marker and an absent Funnel header. The marker
+is trusted only because the app has no untrusted direct route. It is not a
+credential: an ingress or permitted qrexec caller is trusted to assert the
+route, while the app still authenticates the token. The supplied Qubes Compose
+omits the static key and pins the marker requirement on. PostgreSQL RLS
+partitions personal rows by the verified OAuth subject or stored native
+principal; neither path adds workspace/project membership ACLs.
 
 The complete audience union, seeded personal-only `sensitive` workspace, and
 operator contract are in [Memory spaces](spaces.md). `sensitive` is access
@@ -84,13 +81,13 @@ dumps can still read it.
   disappears from the Caddyfile. A tailnet client can't escalate into the funnel
   branch either: the discriminating `Tailscale-Funnel-Request` header is
   injected by `tailscaled` itself, not controllable by clients.
-- **Credentials are not stripped per-branch.** The server decides per deployment
-  which door it accepts: on OAuth-only Funnel/Qubes deployments `MCP_ACCESS_KEY`
-  is unset and `ENABLE_NATIVE_TOKENS=false`, so every presented `x-brain-key` is
-  ignored; the local install accepts configured native/static credentials.
-  Either way the access-log `format filter` deletes both credential headers
-  (`X-Brain-Key`, `Authorization`) so neither reaches disk. App-layer
-  `requireAuth` is the load-bearing check.
+- **Native credentials are confined per branch.** Caddy removes keys and caller
+  markers publicly, replaces the marker privately, and forwards OAuth on either
+  route. The backend requires that exact marker when configured for the trusted
+  proxy, and rejects requests also carrying the Funnel header. The access-log
+  filters redact both credential headers. Behavioral CI exercises the real
+  Caddyfile's header forwarding, public IP denial and private routes; database
+  tests pin missing-credential audit reasons and personal isolation.
 
 ### Application layer
 
@@ -102,8 +99,9 @@ dumps can still read it.
   authentication hashes before a prefix-indexed lookup and uses a constant-time
   digest comparison, including a dummy comparison for unknown prefixes. Every
   request re-reads revocation state, and storage errors fail closed. The boot
-  log states which door(s) are active and warns if the `x-brain-key` and OAuth
-  doors are both on (intended for a private local install only).
+  log states which doors are active and whether native credentials require the
+  trusted proxy marker. Mixed doors without confinement produce a warning; that
+  configuration is intended only for a private local install.
 - Bearer validation pins issuer, audience, algorithm (RS256), and requires `exp`
   plus a bounded, non-empty, control-free string `sub`; verification fails
   closed before any source-marker stamping runs. Only after verification does a
@@ -220,7 +218,7 @@ detection:
 | Role                    | Privileges                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Used by                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `postgres`              | superuser                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | init + DB admin (role provisioning / migrations) — never the app runtime. In the three-qube split it's reachable only through the app qube's dom0-gated ConnectTCP channel for remote admin — a deliberate trade-off (a compromised app qube then has full DB admin, including an app→db OS pivot via `COPY … TO/FROM PROGRAM`); see [db-qube/README.md](../deploy/qubes/db-qube/README.md) and [#15](https://github.com/lcjanke2020/ob1-selfhosted/issues/15) |
-| `openbrain_app`         | SELECT/INSERT on `thoughts` plus UPDATE of its content columns only (`content`, `embedding`, `content_fingerprint`, `metadata`, `updated_at` — never `workspace_id`/`project_id`/`visibility`/`owner_subject`); scoped session grants; SELECT/INSERT-only on `mcp_auth_events`, `thought_revisions` (append-only, head-gated RLS), and metadata-degradation history; SELECT/INSERT/DELETE on its pending-delivery outbox; SELECT/UPDATE on its singleton delivery ledger; EXECUTE on exactly three reviewed `memory_scope` helpers (audience predicate, search candidates, and the audience-move `SECURITY DEFINER`); and SELECT of only the four native-token verification fields; **no auth-event UPDATE/DELETE, thought/history DELETE, or token mutation**, no schema-wide DML, and no role memberships | MCP server, metadata notification worker                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `openbrain_app`         | SELECT/INSERT on `thoughts` plus UPDATE of its content columns only (`content`, `embedding`, `content_fingerprint`, `metadata`, `updated_at` — never `workspace_id`/`project_id`/`visibility`/`owner_subject`); scoped session grants; SELECT/INSERT-only on `mcp_auth_events`, `thought_revisions` (append-only, head-gated RLS), and metadata-degradation history; SELECT/INSERT/DELETE on its pending-delivery outbox; SELECT/UPDATE on its singleton delivery ledger; EXECUTE on exactly three reviewed `memory_scope` helpers (audience predicate, search candidates, and the audience-move `SECURITY DEFINER`); and SELECT of only the five native-token verification fields; **no auth-event UPDATE/DELETE, thought/history DELETE, or token mutation**, no schema-wide DML, and no role memberships | MCP server, metadata notification worker                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `openbrain_auth_rollup` | Direct `public` schema USAGE with no grantable ACL from any grantor, plus non-delegable SELECT/DELETE on `mcp_auth_events` only; no INSERT/UPDATE, sequence access, relation/sequence default ACL, database/schema `CREATE`, other corpus relation access, privileged-function execution, unsafe cluster attributes, or role memberships                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | target-pinned corpus auth-event report and retention job                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `openbrain_ingester`    | INSERT-only on `funnel_access_log`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | log-ingester sidecar on the separate log sink — it parses attacker-influenced log lines, so its database blast radius is one disposable table and the role name is rejected by the corpus                                                                                                                                                                                                                                                                      |
 | `openbrain_monitor`     | SELECT on `funnel_access_log` only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | host-side funnel monitor ([`scripts/funnel_monitor.sh`](../scripts/funnel_monitor.sh)) on the separate sink; it cannot read even the aggregate table, much less a thought or reason-coded auth event                                                                                                                                                                                                                                                           |
@@ -308,7 +306,9 @@ history link instead of erasing the audit or blocking deletion. The grant
 assertion covers all three relations and the event sequence, including effective
 `PUBLIC` access.
 
-`db/08-access-tokens.sql` isolates credential material in `native_auth`. The
+`db/08-access-tokens.sql` isolates credential material in `native_auth`;
+`db/14-native-token-principals.sql` adds stable per-token principals and
+requires an explicit principal in the restricted registration function. The
 application role can perform only its bounded prefix/hash/revocation lookup; the
 dedicated administrator lists non-secret metadata and mutates lifecycle state
 only through two owner-controlled, fixed-search-path `SECURITY DEFINER`

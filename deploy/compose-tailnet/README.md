@@ -441,7 +441,7 @@ index each time:
 ```bash
 (
 set -e
-docker compose --env-file .env build mcp log-ingester subject-admin
+docker compose --env-file .env build mcp log-ingester subject-admin token-admin
 # 1.25.0+: set OPENBRAIN_AUTH_ROLLUP_PASSWORD in .env and create/rotate the
 # dedicated role before 02-observability.sql grants to it.
 bash ../../scripts/upgrade-enable-auth-rollup-role.sh .
@@ -459,7 +459,9 @@ docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postg
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/11-session-update-grants.sql
 docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/12-auth-audit-grants.sql
 docker compose --env-file .env exec -T postgres psql -X --single-transaction -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/13-oauth-subjects.sql
-docker compose --env-file .env exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d openbrain < ../../db/03-grants-assertion.sql
+cat ../../db/14-native-token-principals.sql ../../db/03-grants-assertion.sql |
+  docker compose --env-file .env exec -T postgres \
+    psql -X --single-transaction -v ON_ERROR_STOP=1 -U postgres -d openbrain
 # First upgrade to database admission: import while MCP is still stopped.
 docker compose --env-file .env --profile tools run --rm subject-admin import-env --json
 docker compose --env-file .env --profile tools run --rm subject-admin list --json
@@ -470,6 +472,15 @@ test "$admission_review" = verified
 docker compose --env-file .env up -d
 )
 ```
+
+Upgrading to **1.27.0**: migration 14 is required even though Pattern B keeps
+native tokens disabled. Apply it and the final grants assertion in the same
+transaction, as above. Replaying 08 without finishing with 14 restores the
+retired principal-less registration function and fails the assertion. After 14,
+the 1.26.0 server and token-creation CLI no longer match the catalog; restarting
+the old image requires the
+[native-token schema rollback](../../docs/native-access-tokens.md#rollback), not
+just restoring its image tag.
 
 Upgrading to **1.25.0+**: provision `openbrain_auth_rollup` with the helper in
 the block, then apply `12-auth-audit-grants.sql` and the completed-catalog
@@ -532,12 +543,13 @@ before server 1.16.0; the boot probe refuses a partial catalog. See
 [Metadata degradation monitoring](../../docs/metadata-degradation-monitoring.md)
 for audit queries and optional Pushover/ntfy configuration.
 
-`08-access-tokens.sql` is required by the server catalog probe, but the public
-Pattern B override pins `ENABLE_NATIVE_TOKENS=false` and clears the static key,
-so every `x-brain-key` remains rejected. Its dedicated administrator role may
-remain `NOLOGIN` only when no credential administration is needed. The current
-OAuth admission lifecycle uses this same administrator and needs its provisioned
-login even though native-token HTTP authentication remains disabled. See
+`08-access-tokens.sql` and, from 1.27.0, `14-native-token-principals.sql` are
+required by the server catalog probe, but the public Pattern B override pins
+`ENABLE_NATIVE_TOKENS=false` and clears the static key, so every `x-brain-key`
+remains rejected. Its dedicated administrator role may remain `NOLOGIN` only
+when no credential administration is needed. The current OAuth admission
+lifecycle uses this same administrator and needs its provisioned login even
+though native-token HTTP authentication remains disabled. See
 [Native access tokens](../../docs/native-access-tokens.md#existing-database-upgrade).
 
 The two old role-upgrade helper names remain only as fail-closed tombstones.
@@ -571,9 +583,10 @@ A non-zero exit means a completed-catalog invariant failed. Prefer a targeted
 fix (e.g. `REVOKE DELETE ON public.thoughts FROM openbrain_app;`). To re-sync
 wholesale on 1.25.0+, provision `openbrain_auth_rollup` first with the helper
 used in the upgrade block above, then re-apply `01-schema.sql` →
-`02-observability.sql`, apply pending numbered migrations `04` through `13`, and
-run `03-grants-assertion.sql` **last** — never `01` alone, since its REVOKE-all
-block strips observability grants until `02` restores them.
+`02-observability.sql`, apply pending numbered migrations `04` through `14`, and
+run `03-grants-assertion.sql` **last**, with 14 and the assertion in one
+transaction as above. Never run `01` alone, since its REVOKE-all block strips
+observability grants until `02` restores them.
 
 To retire the unused historical thought-search RPC without a full schema replay,
 run

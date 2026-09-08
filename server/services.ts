@@ -566,10 +566,12 @@ export async function captureSessionFromToml(
       // tokens use `tailnet`. These are auth/provenance labels, not Caddy
       // route evidence.
       source: input.auth.door,
-      // OAuth stamps its verified subject. A native token has no identity
-      // principal, but its server-verified label is still useful attribution.
+      // OAuth stamps its verified subject. Native sessions retain the token
+      // label as attribution; their personal owner is the stored principal.
       // The legacy static key has neither and remains null.
-      sourceNode: input.auth.sub ?? input.auth.tokenLabel,
+      sourceNode: input.auth.door === "tailnet"
+        ? input.auth.tokenLabel
+        : input.auth.sub,
     },
     rawToml,
     scope,

@@ -5,9 +5,10 @@
 // (compose-local) and/or an Auth0 RS256 Bearer JWT (the OAuth door used by the
 // Funnel + Qubes deployments). On a publicly reachable deployment Caddy fronts
 // the server (the Anthropic IP allowlist, pre-auth Funnel body cap, access
-// logging with credential redaction) but does not strip credentials per branch
-// — the server accepts only the door(s) the deployment enabled, so `requireAuth`
-// is the load-bearing check and works equally well behind a single-port
+// logging with credential redaction). It strips native credentials publicly and
+// replaces the tailnet marker privately. requireAuth checks that marker on
+// proxy-confined deployments and verifies every credential. The local install
+// does not need a proxy; the server's request auth also works in a single-port
 // deployment. The server independently caps authenticated MCP bodies so direct
 // tailnet/in-qube/loopback callers cannot bypass the memory bound.
 // Storage: vanilla Postgres + pgvector (no @supabase/supabase-js, no auth.uid).
@@ -55,6 +56,7 @@ import {
   OAUTH_ALLOWED_SUBJECTS,
   OAUTH_SERVICE_ACCOUNT_SUBJECTS,
   PORT,
+  REQUIRE_TAILNET_TOKEN_MARKER,
 } from "./config.ts";
 import { createApiRouter } from "./api.ts";
 import { pool } from "./db.ts";
@@ -179,23 +181,30 @@ app.all("/", requireRequestAuth, mcpRequestBodyLimit, async (c) => {
 
 console.log(`open-brain-homelab listening on :${PORT}`);
 
-// Auth-door posture at boot. Both doors on is intended only for the loopback /
-// LAN single-box install (which may opt into OAuth on top of the static key).
-// On a publicly-reachable funnel / Qubes deployment the static x-brain-key door
-// should be OFF — warn so an accidental MCP_ACCESS_KEY on a public box is visible
-// in the boot log rather than silently widening the attack surface.
-if ((ENABLE_BRAIN_KEY || ENABLE_NATIVE_TOKENS) && ENABLE_OAUTH) {
+// Report the deployment posture; a mixed deployment without the required
+// trusted proxy marker is suitable only for a private local installation.
+if (
+  (ENABLE_BRAIN_KEY || ENABLE_NATIVE_TOKENS) && ENABLE_OAUTH &&
+  REQUIRE_TAILNET_TOKEN_MARKER
+) {
+  console.log(
+    "[auth] OAuth enabled; x-brain-key requires the trusted tailnet proxy marker. " +
+      "Funnel is OAuth-only. Keep the app reachable only through the trusted proxy.",
+  );
+} else if ((ENABLE_BRAIN_KEY || ENABLE_NATIVE_TOKENS) && ENABLE_OAUTH) {
   console.warn(
     "[auth] both x-brain-key AND OAuth doors enabled. Intended for the single-box " +
-      "/ LAN install only — on a public funnel/Qubes deployment, unset " +
-      "MCP_ACCESS_KEY and disable native tokens so OAuth is the sole path.",
+      "/ LAN install only without REQUIRE_TAILNET_TOKEN_MARKER. Public deployments " +
+      "must confine native tokens with the supplied proxy or disable the key door.",
   );
 } else if (ENABLE_BRAIN_KEY || ENABLE_NATIVE_TOKENS) {
   console.log(
     `[auth] x-brain-key door only (OAuth off; static key ${
       ENABLE_BRAIN_KEY ? "on" : "off"
-    }; rotatable tokens ${ENABLE_NATIVE_TOKENS ? "on" : "off"}). Keep this ` +
-      "install on loopback/LAN or a private tailnet.",
+    }; rotatable tokens ${ENABLE_NATIVE_TOKENS ? "on" : "off"}). ` +
+      (REQUIRE_TAILNET_TOKEN_MARKER
+        ? "Requires the trusted tailnet proxy marker. Keep the app reachable only through the trusted proxy."
+        : "Keep this install on loopback/LAN or a private tailnet."),
   );
 } else {
   console.log("[auth] OAuth door only (x-brain-key disabled).");

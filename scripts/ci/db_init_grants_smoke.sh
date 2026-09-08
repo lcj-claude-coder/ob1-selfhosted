@@ -534,6 +534,7 @@ expect_rejected "token-admin privilege flags" \
   "openbrain_token_admin has unsafe cluster-level role attributes" \
   "CREATEDB, CREATEROLE, REPLICATION"
 apply_sql db/08-access-tokens.sql >/dev/null
+apply_sql db/14-native-token-principals.sql >/dev/null
 super_psql -v ON_ERROR_STOP=1 -tAc \
   "SELECT rolcanlogin AND NOT (
      rolsuper OR rolcreatedb OR rolcreaterole OR

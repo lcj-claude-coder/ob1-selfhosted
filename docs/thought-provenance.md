@@ -56,7 +56,7 @@ the existing classification keys:
   },
   "source": "rest",
   "door": "tailnet",
-  "sub": null,
+  "sub": "native:laptop",
   "token_label": "laptop client",
   "provenance": {
     "schema_version": 1,
@@ -72,15 +72,15 @@ the existing classification keys:
 
 The trust boundary is:
 
-| Persisted key                           | Set by               | Meaning                                                    |
-| --------------------------------------- | -------------------- | ---------------------------------------------------------- |
-| `metadata.source`                       | Server               | Validated transport: `mcp` or `rest`                       |
-| `metadata.door`                         | Server               | Credential label: `tailnet`, `funnel`, or `service`        |
-| `metadata.sub`                          | Server               | Verified OAuth `sub`, or `null` for the native/static door |
-| `metadata.token_label`                  | Server               | Verified native-token label, otherwise `null`              |
-| `metadata.metadata_extraction`          | Server               | Classifier path and model                                  |
-| `metadata.provenance.schema_version`    | Server               | Version of the nested caller-claims contract               |
-| `metadata.provenance.caller_asserted.*` | Authenticated caller | Validated but unverified author/work-context claims        |
+| Persisted key                           | Set by               | Meaning                                                                               |
+| --------------------------------------- | -------------------- | ------------------------------------------------------------------------------------- |
+| `metadata.source`                       | Server               | Validated transport: `mcp` or `rest`                                                  |
+| `metadata.door`                         | Server               | Credential label: `tailnet`, `funnel`, or `service`                                   |
+| `metadata.sub`                          | Server               | Verified OAuth `sub` or stored native principal; legacy/static credentials use `null` |
+| `metadata.token_label`                  | Server               | Verified native-token label, otherwise `null`                                         |
+| `metadata.metadata_extraction`          | Server               | Classifier path and model                                                             |
+| `metadata.provenance.schema_version`    | Server               | Version of the nested caller-claims contract                                          |
+| `metadata.provenance.caller_asserted.*` | Authenticated caller | Validated but unverified author/work-context claims                                   |
 
 The top-level `source`, `door`, `sub`, and `token_label` keys remain canonical
 compatibility keys; they are not copied from caller input. `metadata_extraction`

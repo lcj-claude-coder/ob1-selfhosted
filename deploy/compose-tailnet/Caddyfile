@@ -28,9 +28,9 @@
 # The funnel-only edge request_body cap is scoped via named-matcher directive
 # form (`request_body @funnel { ... }`) so the tailnet branch is unaffected at
 # Caddy. The server separately caps authenticated MCP and REST bodies, including
-# tailnet-direct requests. Credentials are NOT stripped per-branch: the
-# access-log `format filter` redacts them on disk, and the server decides per
-# deployment which auth door (x-brain-key / OAuth) it accepts.
+# tailnet-direct requests. Public native credentials and caller route markers
+# are removed; the private proxy sets the trusted marker. Access-log filters
+# redact credentials on disk. The server still verifies every accepted token.
 #
 # Per-branch access logs are routed via Caddy's `log_name` directive
 # inside each handle — funnel-originated requests land in
@@ -148,20 +148,13 @@
 	# defense-in-depth behaviors.
 	@funnel header Tailscale-Funnel-Request *
 
-	# ----- Credentials are NOT stripped per-branch ---------------------
-	# x-brain-key is passed through to the server, which decides whether to
-	# accept it. Funnel + Qubes clear MCP_ACCESS_KEY and set
-	# ENABLE_NATIVE_TOKENS=false, so OAuth is the sole door even if the header
-	# is forwarded. A private local install may accept native/static credentials.
-	# Either way the key never reaches disk — the access-log `format filter`
-	# deletes the X-Brain-Key header (see the loggers below).
-
-	# NOTE: the tailnet branch does NOT strip Authorization. This Caddyfile
-	# fronts the OAuth-only deployments (single-box funnel + the Qubes split),
-	# where tailnet-direct clients authenticate with the same Auth0 Bearer JWT
-	# as funnel clients, so the tailnet branch must forward Authorization to
-	# the server. (Stripping it was correct only while the tailnet door was the
-	# static x-brain-key door; it is the OAuth door now.)
+	# ----- Native tokens are confined to the tailnet branch -------------
+	# Discard caller-supplied markers everywhere, and keys on both public
+	# branches. Only the tailnet reverse_proxy below sets the trusted marker.
+	# The backend requires it when REQUIRE_TAILNET_TOKEN_MARKER=true and has
+	# no untrusted direct listener. Authorization remains usable on both branches.
+	request_header -X-OpenBrain-Tailnet
+	request_header @funnel -X-Brain-Key
 
 	# ----- Body cap (funnel only) --------------------------------------
 	# 1. Bogus-Bearer floods — RS256 verify is CPU-expensive; small body
@@ -334,7 +327,10 @@
 		header @claude_origin Access-Control-Allow-Origin "{http.request.header.Origin}"
 		header @claude_origin Access-Control-Expose-Headers "WWW-Authenticate, mcp-session-id"
 
-		reverse_proxy {$MCP_UPSTREAM:mcp:8787}
+		reverse_proxy {$MCP_UPSTREAM:mcp:8787} {
+			header_up -X-Brain-Key
+			header_up -X-OpenBrain-Tailnet
+		}
 	}
 
 	# ----- Non-Anthropic funnel → 403 -----------------------------------
@@ -349,6 +345,8 @@
 	# ----- Tailnet door -------------------------------------------------
 	handle @tailnet {
 		log_name access_tailnet
-		reverse_proxy {$MCP_UPSTREAM:mcp:8787}
+		reverse_proxy {$MCP_UPSTREAM:mcp:8787} {
+			header_up X-OpenBrain-Tailnet 1
+		}
 	}
 }

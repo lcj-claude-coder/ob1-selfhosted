@@ -296,12 +296,20 @@ export const ENABLE_NATIVE_TOKENS = parseBooleanSetting(
   false,
 );
 
+// Only enable behind the supplied proxy with no untrusted route to the app.
+// Caddy replaces this marker on the tailnet branch and removes it on Funnel.
+// Local installs without a proxy keep the default false.
+export const REQUIRE_TAILNET_TOKEN_MARKER = parseBooleanSetting(
+  "REQUIRE_TAILNET_TOKEN_MARKER",
+  optionalTrimmed("REQUIRE_TAILNET_TOKEN_MARKER"),
+  false,
+);
+
 // MCP_ACCESS_KEY enables the static x-brain-key auth door. It is OPTIONAL:
 // set it to turn the legacy static matcher ON, or leave it empty to disable
 // that matcher. Native tokens can independently keep the same header door on.
-// The `compose-tailnet` (Funnel) and `qubes` deployments leave it empty, disable
-// native tokens, and rely on OAuth alone — the single-door posture recommended
-// for any publicly reachable install.
+// Public deployments leave the static key empty. Split Qubes may enable native
+// tokens behind its required trusted marker; public Funnel remains OAuth-only.
 //
 // When set, a minimum length is enforced. `.env.example` documents
 // `openssl rand -hex 32` (64 hex chars = 256 bits) as the generator; a weak key
@@ -331,11 +339,8 @@ export const MCP_ACCESS_KEY: string | null = rawBrainKey
   : null;
 export const ENABLE_BRAIN_KEY = MCP_ACCESS_KEY !== null;
 
-// Neither the static x-brain-key nor a native token label is a principal.
-// Personal memory is therefore disabled on that door unless the operator
-// explicitly binds the whole deployment to one stable server-trusted subject.
-// This value is never read from caller input and does not alter metadata.sub
-// (which remains null for every tailnet/native-door capture).
+// Bind only the legacy static key to a personal-memory principal. Native tokens
+// use their own database principal, including null for pre-migration tokens.
 export const MCP_ACCESS_KEY_PRINCIPAL = optionalTrimmed(
   "MCP_ACCESS_KEY_PRINCIPAL",
 );
@@ -343,10 +348,10 @@ if (MCP_ACCESS_KEY_PRINCIPAL.length > 1024) {
   throw new Error("MCP_ACCESS_KEY_PRINCIPAL must be at most 1024 characters");
 }
 if (
-  MCP_ACCESS_KEY_PRINCIPAL && !ENABLE_BRAIN_KEY && !ENABLE_NATIVE_TOKENS
+  MCP_ACCESS_KEY_PRINCIPAL && !ENABLE_BRAIN_KEY
 ) {
   throw new Error(
-    "MCP_ACCESS_KEY_PRINCIPAL requires MCP_ACCESS_KEY or ENABLE_NATIVE_TOKENS=true; refusing an unused principal binding",
+    "MCP_ACCESS_KEY_PRINCIPAL requires MCP_ACCESS_KEY; native tokens use their stored principal. Remove this setting for a native-token-only deployment.",
   );
 }
 export const PORT = requiredInt("PORT", 8787);
@@ -445,12 +450,9 @@ if (OAUTH_ALLOWED_SUBJECTS.size > 0 && !ENABLE_OAUTH) {
 
 // At least one auth door must be enabled. With MCP_ACCESS_KEY, native-token
 // verification, and AUTH0_* (OAuth) all optional, a deployment with none would
-// boot wide open — refuse that. compose-local enables native tokens; Funnel +
-// Qubes deployments set AUTH0_*. (This replaces the old PATTERN_B guard, whose
-// only job was to stop a leaked x-brain-key going public over the funnel — moot
-// now that funnel deployments carry no x-brain-key. Keeping Caddy as the sole
-// entry point — not publishing mcp's raw host port — is now a deployment-hygiene
-// measure handled by the compose override structure + docs, not a boot check.)
+// boot wide open — refuse that. The local Compose opts into native tokens;
+// public deployments always keep OAuth configured and constrain native tokens
+// to their private proxy route when enabled.
 if (!ENABLE_BRAIN_KEY && !ENABLE_NATIVE_TOKENS && !ENABLE_OAUTH) {
   throw new Error(
     "No auth door configured: set MCP_ACCESS_KEY and/or " +
