@@ -166,7 +166,7 @@ Server 1.19.0 also requires `db/08-access-tokens.sql` on the DB qube followed by
 requires `db/14-native-token-principals.sql`. Native verification is opt-in
 (`ENABLE_NATIVE_TOKENS=false` by default); the marker requirement is pinned true
 and the static key remains absent. Follow the
-[confined native-token rollout](../../../docs/native-access-tokens.md#split-qubes-deployment)
+[confined native-token rollout](../../../docs/native-access-tokens.md#rollback)
 before enabling it. Public Funnel stays OAuth-only.
 
 Server 1.20.0 introduced the allowed+denied audit shape in
@@ -350,11 +350,24 @@ version. Apply migrations before the roll, not with it.
    [existing-sink upgrade](../ingress-qube/README.md#existing-sink-upgrade-coordinate-the-schema-and-installed-rollup)
    before its timers resume.
 6. Build the replacement with
-   `docker compose --env-file .env build mcp subject-admin` while the current
-   MCP is still serving. Then stop `mcp`, apply the migrations in ascending
-   order, and run `db/03-grants-assertion.sql`. It must exit 0. It reads the
-   completed catalog, so a partial migration or a widened role fails it loudly;
-   leave MCP stopped on failure.
+   `docker compose --env-file .env build mcp subject-admin token-admin` while
+   the current MCP is still serving. Then stop `mcp` and apply earlier pending
+   migrations in ascending order, through 13. Finish with migration 14 and
+   `db/03-grants-assertion.sql` in one transaction, **even with native tokens
+   disabled**. From the checkout root, using the existing administrator psql
+   connection over ConnectTCP:
+
+   ```bash
+   psql -X --single-transaction -v ON_ERROR_STOP=1 \
+     -f db/14-native-token-principals.sql \
+     -f db/03-grants-assertion.sql
+   ```
+
+   The assertion reads the completed catalog, so a partial migration or widened
+   role fails loudly; leave MCP stopped on failure. After migration 14, the
+   1.26.0 image cannot restart against the new catalog. Follow the
+   [schema rollback procedure](../../../docs/native-access-tokens.md#rollback)
+   before restoring that image.
 7. With MCP still stopped, import and inspect the OAuth inventory from
    `deploy/qubes/app-qube`:
 
@@ -768,9 +781,9 @@ pg_isready -h <this-qube-ip> -p 5432  # "accepting connections" — via qrexec t
 The `tools` profile provides one-shot `subject-admin` and `token-admin` clients
 through this qube's existing ConnectTCP database forwarder. They carry only the
 `OPENBRAIN_TOKEN_ADMIN_PASSWORD` credential, which is never injected into MCP.
-Provision the role and DB-qube HBA records, apply migration 13 plus the final
-assertion, import the old subject lists, and remove those lists from `.env`
-before the MCP roll. Follow
+Provision the role and DB-qube HBA records, apply migrations 13 and 14 plus the
+final assertion atomically, import the old subject lists, and remove those lists
+from `.env` before the MCP roll. Follow
 [the full migration and rollback procedure](../../../docs/oauth-subjects.md). No
 ingress-qube or dom0 policy change is needed for subject administration. Native
 tokens remain disabled for HTTP authentication in this deployment.

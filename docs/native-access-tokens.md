@@ -95,19 +95,26 @@ ownership reassignment needs a separate operator-reviewed data migration.
 
 Server **1.27.0 requires migration 14 even with native tokens disabled**.
 Starting it against an older schema or unreadable verification columns fails
-with migration guidance. For a 1.26.0 database, quiesce MCP and take a verified
-backup, then apply the migration and final grants assertion in one transaction:
+with migration guidance. For a 1.26.0 database, preserve the old image and
+environment, take a verified backup, and build the replacement before stopping
+MCP. Then apply the migration and final grants assertion in one transaction:
 
 ```bash
 cd deploy/compose-local
+docker compose --env-file .env build mcp token-admin
 docker compose --env-file .env stop mcp
 cat ../../db/14-native-token-principals.sql ../../db/03-grants-assertion.sql |
   docker compose --env-file .env exec -T postgres \
     psql -X --single-transaction -v ON_ERROR_STOP=1 -U postgres -d openbrain
-# Review token-admin list --json and remove any native-only shared principal.
-docker compose --env-file .env build mcp token-admin
+docker compose --env-file .env --profile tools run --rm token-admin list --json
+# Resolve any legacy personal ownership and remove a native-only shared principal.
 docker compose --env-file .env up -d --no-deps mcp
 ```
+
+Migration 14 changes the token registration function's signature. The 1.26.0
+server cannot boot against that catalog, and its token-creation CLI no longer
+works. Returning to the old image requires the [schema rollback](#rollback)
+before restarting it; changing the image tag alone is insufficient.
 
 Older installations must apply the intervening migrations in the
 [local upgrade sequence](../deploy/compose-local/README.md#upgrading-an-existing-database),
@@ -173,13 +180,22 @@ public request from a non-allowlisted network proves only the IP perimeter. CI
 runs the actual Caddyfile in an isolated container and separately exercises real
 auth→audit and auth→RLS paths against disposable PostgreSQL.
 
-**Rollback:** turn native tokens off and stop the new MCP first. If reverting to
-the 1.26.0 image, restore its token registration contract in a transaction: drop
-`native_auth.register_access_token(text,bytea,text,text)` without CASCADE,
-reapply the **1.26.0** `db/08-access-tokens.sql`, then run its matching final
-grants assertion. Retain the new principal column/data; the old runtime ignores
-it. Start the previous image with its saved OAuth-only environment and verify
-OAuth. Keep the new ingress strip in place until the key door is confirmed off;
+## Rollback
+
+Turn native tokens off, stop MCP, and pause token administration first. Confirm
+that the saved environment has a working OAuth fallback; a local deployment may
+instead use its existing static key and explicit principal. If neither is
+available, leave MCP stopped until a fallback is configured and verified.
+
+Before restarting the 1.26.0 image, restore its token registration contract in a
+transaction: drop `native_auth.register_access_token(text,bytea,text,text)`
+without CASCADE, reapply the **1.26.0** `db/08-access-tokens.sql`, then run its
+matching final grants assertion. Retain the new principal column/data; the old
+runtime ignores it. Run the old assertion before committing, then start the
+previous image with its saved fallback environment and verify authentication.
+Native tokens must remain disabled during this rollback; the old runtime does
+not use their stored principals. For Qubes, retain its OAuth-only environment
+and keep the new ingress strip in place until the key door is confirmed off;
 only then restore the previous ingress image if necessary. A full database
 restore is a separate recovery action and can discard post-backup writes.
 
