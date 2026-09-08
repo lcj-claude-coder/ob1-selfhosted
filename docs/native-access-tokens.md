@@ -96,9 +96,11 @@ a separate operator-reviewed data migration.
 
 Before removing the old principal setting or the last credential that can read
 its rows, record the exact former effective `MCP_ACCESS_KEY_PRINCIPAL`. Run this
-read-only census as the database administrator, replacing the example owner with
-that value. It counts both stores across all workspaces, including `sensitive`,
-without returning memory contents:
+read-only census as the database superuser (`postgres` by default), replacing
+the example owner with that value. The restricted credential administrator
+`openbrain_token_admin` cannot read memory and cannot run this census. The
+census counts both stores across all workspaces, including `sensitive`, without
+returning memory contents:
 
 ```sql
 \set legacy_owner 'legacy-owner'
