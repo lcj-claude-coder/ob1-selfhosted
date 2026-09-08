@@ -43,11 +43,11 @@ intervening work, subject to the verification rules below.
 
 Count **substantive user/assistant turns** for the current work session: one
 user request and the assistant's work responding to it, regardless of tool
-calls, progress messages, or automatic continuations. A turn is substantive
-when actual work happened on the machine, or the goal, decisions, blockers, or
-next actions changed. Pure greetings, thanks, and goodbyes neither advance the
-counter nor trigger a save. An assistant final response ends a turn; it does
-not necessarily end the work session.
+calls, progress messages, or automatic continuations. A turn is substantive when
+actual work happened on the machine, or the goal, decisions, blockers, or next
+actions changed. Pure greetings, thanks, and goodbyes neither advance the
+counter nor trigger a save. An assistant final response ends a turn; it does not
+necessarily end the work session.
 
 - Save at the end of each of the first three substantive turns.
 - Then save every third substantive turn: **6, 9, 12, …**. Between checkpoints,
@@ -66,14 +66,14 @@ not necessarily end the work session.
 Keep the counter and pending changes in working context. On resume, continue
 from a counter available in the restored conversation or local handoff context;
 context compaction and tool calls do not reset it. If the count is unavailable,
-restart at turn 1 for the resumed work without creating a new session record.
-Do not add schema fields or perform an extra Open Brain write, lookup, or full
+restart at turn 1 for the resumed work without creating a new session record. Do
+not add schema fields or perform an extra Open Brain write, lookup, or full
 transcript scan just to maintain or reconstruct the counter. Recover the
 existing record's `id` and scope through the normal resume path before saving.
 
 A failed save is not a checkpoint: retain pending changes and report the
-failure. Retry when the cause is resolved, on the next scheduled checkpoint,
-or when explicitly asked; avoid a per-turn retry loop. Cadence never licenses
+failure. Retry when the cause is resolved, on the next scheduled checkpoint, or
+when explicitly asked; avoid a per-turn retry loop. Cadence never licenses
 inventing a resumable handle or claiming an unsaved change is stored.
 
 ## Mental model
