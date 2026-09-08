@@ -39,7 +39,8 @@ transport identity. See
 
 Loading this skill or reading a session does not itself require a write. Treat
 Open Brain as a checkpoint index; the harness transcript usually retains the
-intervening work, subject to the verification rules below.
+intervening work, subject to the
+[resumable-handle verification rules](#the-resumable-handle-session_id).
 
 Count **substantive user/assistant turns** for the current work session: one
 user request and the assistant's work responding to it, regardless of tool
@@ -55,8 +56,8 @@ end the work session.
 - Then save every third substantive turn: **6, 9, 12, …**. Between checkpoints,
   retain changes in working context rather than issuing session writes.
 - Honor an explicit user request to save immediately, even off cadence or with
-  no new work. Explicit requests take precedence over the greeting/goodbye
-  no-op rules. They do not reset the regular counter.
+  no new work. Explicit requests take precedence over the greeting/goodbye no-op
+  rules. They do not reset the regular counter.
 - Save the **final significant turn** when finishing the task, handing off,
   pausing for review, or stopping on a blocker. Include the current state and
   what comes next. If an ending becomes apparent later, flush any still-unsaved
@@ -69,8 +70,8 @@ end the work session.
 
 Keep the number of completed substantive turns and pending changes in working
 context. Continue a counter only when its exact value was explicitly carried
-forward in the conversation or local handoff, including a compaction summary;
-do not infer a count from a prose recap. Resuming, context compaction, and tool
+forward in the conversation or local handoff, including a compaction summary; do
+not infer a count from a prose recap. Resuming, context compaction, and tool
 calls do not reset a known counter. If the count is missing or uncertain, even
 after compaction within the same conversation, restart at turn 1 for the
 continuing work without creating a new session record. This repeats the first
@@ -370,8 +371,8 @@ title = "Benchmark: sliding-window vs token-bucket"
 
 Apply the [save cadence](#save-cadence) before assembling a payload. Every save
 — scheduled, explicit, final, or retried — includes all pending substantive
-changes, not just the latest turn. Follow the full replacement contract below
-to retain existing fields and artifacts.
+changes, not just the latest turn. Follow the full replacement contract below to
+retain existing fields and artifacts.
 
 1. Populate `repo_url`, `branch`, and `head` from the **live checkout**
    (`git rev-parse`, `git branch --show-current`), not memory or returned
@@ -498,9 +499,9 @@ record.
 ## Lifecycle
 
 The same [save cadence](#save-cadence) governs lifecycle writes. A transition
-that ends work, pauses for review, or stops on a blocker is a final-significant-turn
-trigger and saves immediately. A mid-work status change waits for the next
-otherwise-applicable checkpoint.
+that ends work, pauses for review, or stops on a blocker is a
+final-significant-turn trigger and saves immediately. A mid-work status change
+waits for the next otherwise-applicable checkpoint.
 
 Use `session_update_status` only when status is the sole pending change. If any
 context or artifact changes are also pending, use one `session_capture` that
