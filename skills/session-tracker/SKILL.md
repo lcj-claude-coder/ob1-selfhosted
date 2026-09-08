@@ -361,8 +361,10 @@ title = "Benchmark: sliding-window vs token-bucket"
 
 ## Capturing a session
 
-Apply the [save cadence](#save-cadence) before assembling a payload. A due save
-includes all pending substantive changes, not just the latest turn.
+Apply the [save cadence](#save-cadence) before assembling a payload. Every save
+— scheduled, explicit, final, or retried — includes all pending substantive
+changes, not just the latest turn. Follow the full replacement contract below
+to retain existing fields and artifacts.
 
 1. Populate `repo_url`, `branch`, and `head` from the **live checkout**
    (`git rev-parse`, `git branch --show-current`), not memory or returned
