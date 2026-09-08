@@ -379,15 +379,26 @@ text.
 Native tokens rotate without restarting Open Brain or disrupting other clients:
 
 ```bash
-docker compose --profile tools run --rm token-admin create "laptop replacement"
+# Look up the old prefix and reuse its exact non-null principal.
+docker compose --profile tools run --rm token-admin list --json
+# Example: the old token's principal is native:laptop.
+docker compose --profile tools run --rm token-admin \
+  create "laptop replacement" --principal native:laptop
 # Update and smoke-test that client, then revoke the old public prefix:
 docker compose --profile tools run --rm token-admin revoke ob1_AAAAAAAA
 ```
 
+The replacement must use the old token's principal, not its label or prefix, to
+retain personal ownership. A legacy token with `principal=null` has no stored
+identity to reuse: assign an explicit principal and follow the
+[legacy personal-memory recovery procedure](../../docs/native-access-tokens.md#preserve-access-to-older-personal-rows).
+
 The revoked credential receives HTTP 401 on its next request. Data at rest is
 untouched. If an older deployment still uses `MCP_ACCESS_KEY`, migrate clients
-one at a time, then remove that variable and recreate `mcp`; the static key is
-not represented in the token inventory and cannot be revoked there.
+one at a time and verify access to any older personal rows before removing that
+variable and recreating `mcp`. Keep the local recovery credential described in
+that procedure while an ownership migration is pending. The static key is not
+represented in the token inventory and cannot be revoked there.
 
 ## Database-backed OAuth admission
 

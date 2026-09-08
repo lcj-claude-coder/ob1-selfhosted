@@ -82,14 +82,66 @@ workspace/project access, but personal and `sensitive` access fails closed.
 Rotate them with an explicit principal; neither their label nor the legacy
 shared-key setting supplies an identity automatically.
 
-`MCP_ACCESS_KEY_PRINCIPAL` now binds **only the static `MCP_ACCESS_KEY`**. A
-native-token-only deployment with that setting must remove it before starting
-1.27.0. If a static key is still configured, its binding remains unchanged;
-native tokens never inherit it. Previously captured personal rows retain their
-old owner. No automatic migration of OAuth/shared-key memories occurs. The
-existing `move_thought` operation makes a readable thought personal to the
-calling principal; it cannot silently transfer someone else's personal rows. Any
-ownership reassignment needs a separate operator-reviewed data migration.
+`MCP_ACCESS_KEY_PRINCIPAL` now binds **only the static `MCP_ACCESS_KEY`**.
+Before starting 1.27.0, a native-token-only deployment must remove that setting
+or configure the temporary local recovery key described below. If a static key
+is still configured, its binding remains unchanged; native tokens never inherit
+it. Previously captured personal rows retain their old owner. No automatic
+migration of OAuth/shared-key memories occurs. The existing `move_thought`
+operation makes a readable thought personal to the calling principal; it cannot
+silently transfer someone else's personal rows. Any ownership reassignment needs
+a separate operator-reviewed data migration.
+
+### Preserve access to older personal rows
+
+Before removing the old principal setting or the last credential that can read
+its rows, record the exact former effective `MCP_ACCESS_KEY_PRINCIPAL`. Run this
+read-only census as the database administrator, replacing the example owner with
+that value. It counts both stores across all workspaces, including `sensitive`,
+without returning memory contents:
+
+```sql
+\set legacy_owner 'legacy-owner'
+BEGIN READ ONLY;
+SELECT 'thoughts' AS store, workspace_id, project_id, owner_subject,
+       count(*) AS row_count
+FROM public.thoughts
+WHERE visibility = 'personal' AND owner_subject = :'legacy_owner'
+GROUP BY workspace_id, project_id, owner_subject
+UNION ALL
+SELECT 'sessions' AS store, workspace_id, project_id, owner_subject,
+       count(*) AS row_count
+FROM sessions.session
+WHERE visibility = 'personal' AND owner_subject = :'legacy_owner'
+GROUP BY workspace_id, project_id, owner_subject
+ORDER BY store, workspace_id, project_id, owner_subject;
+ROLLBACK;
+```
+
+Confirm the provenance of those rows before deciding who should own them. An
+owner without the `native:` prefix can also be an OAuth subject; the prefix
+alone is not evidence that a row came from an old native token. Do not select
+every non-native owner for reassignment.
+
+If the old owner already satisfies the `native:<id>` grammar, deliberately
+reusing that exact value for a replacement token preserves ownership. Adding
+`native:` to an arbitrary old owner creates a different identity:
+`native:legacy-owner` cannot read rows owned by `legacy-owner`.
+
+For a **private local installation** with such rows, retain the existing static
+key or configure a temporary static recovery key from at least 32 random bytes
+in a trusted secret store. Bind `MCP_ACCESS_KEY_PRINCIPAL` to the exact old
+owner and recreate MCP. Verify this credential can read the expected personal
+thoughts and sessions, including `sensitive`; new native tokens still use only
+their own stored principals. Keep the recovery key until an operator-reviewed
+ownership migration has been backed up, applied, and verified for both stores.
+Then remove both static-key variables and recreate MCP again.
+
+The supplied Qubes and Pattern B deployments keep the static key absent. Do not
+enable a static key there to recover unexpected legacy rows; arrange a reviewed
+data migration through the existing database-administration path before retiring
+the last working reader. No ownership updates are performed by migration 14 or
+by token rotation.
 
 ## Existing database upgrade
 

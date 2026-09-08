@@ -207,10 +207,12 @@ namespace when assigning subjects in custom OIDC issuers to avoid collisions.
 Older native tokens retain `principal=NULL`: workspace/project access remains,
 but personal and `sensitive` access fails closed. `MCP_ACCESS_KEY_PRINCIPAL`
 applies only when the legacy static `MCP_ACCESS_KEY` is configured. It is never
-a fallback for a native token, and a native-only installation must remove that
-setting before upgrading to 1.27.0. Existing personal rows retain their old
-owners; there is no automatic reassignment. See
-[native-token migration and rotation](native-access-tokens.md).
+a fallback for a native token. Before upgrading to 1.27.0, follow the
+[legacy personal-memory recovery procedure](native-access-tokens.md#preserve-access-to-older-personal-rows)
+to census both stores and preserve a reader for the old owner. A native-only
+installation must remove the setting or configure the temporary local static
+recovery key described there. Existing personal rows retain their old owners;
+there is no automatic reassignment.
 
 ## Registering workspaces and projects
 
