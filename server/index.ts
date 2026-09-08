@@ -201,8 +201,10 @@ if (
   console.log(
     `[auth] x-brain-key door only (OAuth off; static key ${
       ENABLE_BRAIN_KEY ? "on" : "off"
-    }; rotatable tokens ${ENABLE_NATIVE_TOKENS ? "on" : "off"}). Keep this ` +
-      "install on loopback/LAN or a private tailnet.",
+    }; rotatable tokens ${ENABLE_NATIVE_TOKENS ? "on" : "off"}). ` +
+      (REQUIRE_TAILNET_TOKEN_MARKER
+        ? "Requires the trusted tailnet proxy marker. Keep the app reachable only through the trusted proxy."
+        : "Keep this install on loopback/LAN or a private tailnet."),
   );
 } else {
   console.log("[auth] OAuth door only (x-brain-key disabled).");

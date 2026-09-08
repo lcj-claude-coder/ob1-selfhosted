@@ -519,7 +519,8 @@ async function unauthorized(
 
 // Accepts the x-brain-key door (native token and/or legacy static key) OR
 // Authorization: Bearer with a valid RS256 JWT (OAuth door, when enabled).
-// Public deployments require Caddy's trusted tailnet marker for x-brain-key.
+// The supplied public Compose deployments pin REQUIRE_TAILNET_TOKEN_MARKER
+// to require Caddy's trusted tailnet marker for x-brain-key (server default: off).
 // Their app listener is private to the proxy; the marker is not a credential
 // and must never be trusted on an app port reachable by untrusted callers.
 // The supplied Caddyfile removes keys and the marker from public requests.

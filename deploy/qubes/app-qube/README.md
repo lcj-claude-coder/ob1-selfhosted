@@ -786,4 +786,6 @@ final assertion atomically, import the old subject lists, and remove those lists
 from `.env` before the MCP roll. Follow
 [the full migration and rollback procedure](../../../docs/oauth-subjects.md). No
 ingress-qube or dom0 policy change is needed for subject administration. Native
-tokens remain disabled for HTTP authentication in this deployment.
+tokens default off; private tailnet HTTP use requires a separate opt-in after
+[migration 14 and the ingress confinement checks](../../../docs/native-access-tokens.md#split-qubes-deployment).
+Public Funnel requests remain OAuth-only.
