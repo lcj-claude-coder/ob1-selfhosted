@@ -21,7 +21,7 @@ function env(name: string, fallback?: string): string {
 
 function usage(): string {
   return `Usage:
-  token-admin create <label> [--json]
+  token-admin create <label> --principal native:<id> [--json]
   token-admin list [--json]
   token-admin revoke <prefix> [--json]`;
 }
@@ -31,6 +31,7 @@ function printHumanCreated(
 ) {
   console.log("Token created. Copy it now; it will not be shown again.");
   console.log(`Label:   ${result.label}`);
+  console.log(`Principal: ${result.principal}`);
   console.log(`Prefix:  ${result.prefix}`);
   console.log(`Token:   ${result.token}`);
   console.log("Header:  x-brain-key: <token>");
@@ -43,12 +44,12 @@ function printHumanList(
     console.log("No native access tokens exist.");
     return;
   }
-  console.log("PREFIX\tSTATE\tLABEL\tCREATED_AT\tREVOKED_AT");
+  console.log("PREFIX\tSTATE\tLABEL\tPRINCIPAL\tCREATED_AT\tREVOKED_AT");
   for (const row of rows) {
     console.log(
-      `${row.prefix}\t${
-        row.revoked_at ? "revoked" : "active"
-      }\t${row.label}\t${row.created_at}\t${row.revoked_at ?? "-"}`,
+      `${row.prefix}\t${row.revoked_at ? "revoked" : "active"}\t${row.label}\t${
+        row.principal ?? "-"
+      }\t${row.created_at}\t${row.revoked_at ?? "-"}`,
     );
   }
 }
@@ -56,17 +57,25 @@ function printHumanList(
 export type TokenAdminArgs = {
   command: string;
   value: string | undefined;
+  principal?: string;
   json: boolean;
 };
 
 export function parseTokenAdminArgs(args: string[]): TokenAdminArgs | null {
-  // Treat a trailing --json as the flag except when it is create's sole label.
-  // Thus `create --json` creates that literal label, while
-  // `create --json --json` requests JSON for it.
+  // A label can literally be --json. Creation still requires --principal;
+  // only an additional trailing --json selects JSON output.
   const json = args.at(-1) === "--json" &&
     (args[0] !== "create" || args.length > 2);
   const positional = json ? args.slice(0, -1) : args;
   const [command, value, ...extra] = positional;
+  if (command === "create") {
+    if (
+      !value || extra.length !== 2 || extra[0] !== "--principal" || !extra[1]
+    ) {
+      return null;
+    }
+    return { command, value, principal: extra[1], json };
+  }
   if (!command || extra.length > 0) return null;
   return { command, value, json };
 }
@@ -87,7 +96,7 @@ export async function runTokenAdmin(
       console.error(usage());
       return 2;
     }
-    const result = await createAccessToken(pool, value);
+    const result = await createAccessToken(pool, value, parsed.principal!);
     if (json) console.log(JSON.stringify(result));
     else printHumanCreated(result);
     return 0;

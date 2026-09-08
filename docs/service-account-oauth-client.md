@@ -20,11 +20,11 @@ bypass authorization.
 
 After verification, the server assigns one of three provenance labels:
 
-| `door` label | Verified credential class      | Principal                                     |
-| ------------ | ------------------------------ | --------------------------------------------- |
-| `funnel`     | OAuth user token               | verified JWT `sub`                            |
-| `service`    | OAuth client-credentials token | verified JWT `sub`                            |
-| `tailnet`    | native/static `x-brain-key`    | configured deployment-wide principal, or none |
+| `door` label | Verified credential class      | Principal                                                       |
+| ------------ | ------------------------------ | --------------------------------------------------------------- |
+| `funnel`     | OAuth user token               | verified JWT `sub`                                              |
+| `service`    | OAuth client-credentials token | verified JWT `sub`                                              |
+| `tailnet`    | native/static `x-brain-key`    | stored native principal; static key uses its configured binding |
 
 The historical `funnel` and `tailnet` names are compatibility labels, not proof
 of the Caddy network route. A service-account request normally arrives through
@@ -75,12 +75,13 @@ must publish RSA signing keys at the configured HTTPS JWKS URI. Open Brain does
 not accept opaque tokens, token introspection, symmetric signatures, or
 algorithms other than RS256.
 
-On the Tailnet/Funnel and Qubes deployments, keep `MCP_ACCESS_KEY` unset and
-`ENABLE_NATIVE_TOKENS=false`. The machine flow uses OAuth; it is not a reason to
-reopen either `x-brain-key` credential type on the public deployment. A
-scheduled agent outside Anthropic's egress range must connect over the tailnet
-route, because the public Funnel branch will correctly reject it at Caddy with
-403 before OAuth is attempted.
+Keep `MCP_ACCESS_KEY` unset on public deployments. Single-host Pattern B still
+pins `ENABLE_NATIVE_TOKENS=false`; split Qubes can opt into
+[native tokens on the tailnet branch](native-access-tokens.md#split-qubes-deployment)
+after the confined proxy and principal migration are verified. Public Funnel
+remains OAuth-only. M2M is still the route for callers that must send Bearer
+credentials. A scheduled agent outside Anthropic's egress range must use the
+tailnet route; the public IP perimeter returns 403 before authentication.
 
 ## Auth0 procedure
 
@@ -213,7 +214,7 @@ the Auth0 RFC 9068 or generic-issuer discovery run, then unset it.
 A successful Auth0 run ends like this, without disclosing the credential:
 
 ```text
-OK: browserless client_credentials authenticated to open-brain-homelab 1.26.0
+OK: browserless client_credentials authenticated to open-brain-homelab 1.27.0
 Attribution signal: signed gty=client-credentials present; expected server label is service.
 ```
 

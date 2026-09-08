@@ -33,14 +33,13 @@ const runConfig = (overrides: Record<string, string> = {}) =>
 Deno.test("auth config accepts native tokens as the sole door", async () => {
   const result = await runConfig({
     ENABLE_NATIVE_TOKENS: "true",
-    MCP_ACCESS_KEY_PRINCIPAL: "local-operator",
   });
   assertEquals(result.code, 0, result.stderr);
   assertEquals(JSON.parse(result.stdout), {
     enableNativeTokens: true,
     enableBrainKey: false,
     enableOauth: false,
-    principal: "local-operator",
+    principal: "",
   });
 });
 
@@ -79,4 +78,28 @@ Deno.test("shared-key principal config requires the shared-key door", async () =
   assertEquals(result.code, 1);
   assertStringIncludes(result.stderr, "MCP_ACCESS_KEY_PRINCIPAL");
   assertStringIncludes(result.stderr, "requires MCP_ACCESS_KEY");
+});
+
+Deno.test("native-token-only config refuses the legacy shared principal", async () => {
+  const result = await runConfig({
+    ENABLE_NATIVE_TOKENS: "true",
+    MCP_ACCESS_KEY_PRINCIPAL: "auth0|user",
+  });
+  assertEquals(result.code, 1);
+  assertStringIncludes(
+    result.stderr,
+    "native tokens use their stored principal",
+  );
+});
+
+Deno.test("tailnet marker config rejects inexact booleans", async () => {
+  const result = await runConfig({
+    ENABLE_NATIVE_TOKENS: "true",
+    REQUIRE_TAILNET_TOKEN_MARKER: "yes",
+  });
+  assertEquals(result.code, 1);
+  assertStringIncludes(
+    result.stderr,
+    "REQUIRE_TAILNET_TOKEN_MARKER must be true or false",
+  );
 });

@@ -59,6 +59,11 @@ server image and operator configuration, take and verify a backup, and perform
 the following during a deployment window. Keep admission changes frozen until
 the new server passes its smoke checks.
 
+Current 1.27.0 upgrades also require
+[migration 14](native-access-tokens.md#existing-database-upgrade), even with
+native tokens disabled. The sequence below includes it before the final grants
+assertion; previously admitted OAuth subjects remain unchanged.
+
 1. Put a distinct `OPENBRAIN_TOKEN_ADMIN_PASSWORD` in the deployment's
    owner-only `.env`. It is used only by the tools profile. The role is
    `NOLOGIN` by default until explicitly provisioned. For an external database,
@@ -84,22 +89,25 @@ the new server passes its smoke checks.
    one transaction. Password values are passed through environment variables,
    never command arguments. It does not install or reload `pg_hba.conf`.
 
-2. Apply migration 13 and the current grants assertion together as a PostgreSQL
-   superuser (older databases must first apply the preceding migrations):
+2. Apply migrations 13 and 14 and the current grants assertion together as a
+   PostgreSQL superuser (older databases must first apply the preceding
+   migrations):
 
    ```bash
    docker compose --env-file .env exec -T postgres psql -X -v ON_ERROR_STOP=1 \
      --single-transaction -U postgres -d openbrain \
      -f /docker-entrypoint-initdb.d/13-oauth-subjects.sql \
+     -f /docker-entrypoint-initdb.d/14-native-token-principals.sql \
      -f /docker-entrypoint-initdb.d/99-grants-assertion.sql
    ```
 
    Ensure the running database container has the new read-only migration mount
-   before using these paths. Alternatively stream both checked-out files through
-   `psql --single-transaction`. On Qubes, use the existing
+   before using these paths. Alternatively stream all three checked-out files
+   through `psql --single-transaction`. On Qubes, use the existing
    [native psql upgrade route](../deploy/qubes/app-qube/README.md#upgrading-an-existing-deployment)
-   over ConnectTCP, with `-f` paths to the checkout's `db/13-oauth-subjects.sql`
-   and `db/03-grants-assertion.sql`.
+   over ConnectTCP, with `-f` paths to the checkout's
+   `db/13-oauth-subjects.sql`, `db/14-native-token-principals.sql` and
+   `db/03-grants-assertion.sql`.
 
 3. Build the tools with the reviewed source and import the legacy lists **before
    starting the new server**:

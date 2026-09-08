@@ -15,6 +15,7 @@ import {
   normalizeAccessTokenLabel,
   normalizeAccessTokenPrefix,
   revokeAccessToken,
+  validateAccessTokenPrincipal,
 } from "./access_tokens.ts";
 import { makeFakePool } from "./api_test_support.ts";
 
@@ -30,7 +31,24 @@ Deno.test("native token generation uses a public prefix and 256-bit secret", () 
   assertEquals(token.length, 56);
 });
 
-Deno.test("native token label and prefix validation are bounded", () => {
+Deno.test("native token label, principal and prefix validation are bounded", () => {
+  assertEquals(
+    validateAccessTokenPrincipal("native:agent-1"),
+    "native:agent-1",
+  );
+  for (
+    const value of [
+      "",
+      "auth0|user",
+      "native:",
+      "native:-start",
+      "native:agent\n",
+      "native:agent\u0085",
+      `native:${"a".repeat(122)}`,
+    ]
+  ) {
+    assertThrows(() => validateAccessTokenPrincipal(value));
+  }
   assertEquals(normalizeAccessTokenLabel("  nightly agent  "), "nightly agent");
   assertEquals(
     normalizeAccessTokenLabel("\u00a0nightly agent\u00a0"),
@@ -83,6 +101,7 @@ Deno.test("create persists only hash + metadata and reveals plaintext after regi
         id: 7n,
         prefix: params[0],
         label: params[2],
+        principal: params[3],
         created_at: "2026-07-30T10:00:00.000Z",
       }],
     };
@@ -91,6 +110,7 @@ Deno.test("create persists only hash + metadata and reveals plaintext after regi
   const result = await createAccessToken(
     pool,
     " nightly agent ",
+    "native:nightly",
     deterministicBytes,
   );
   assertEquals(result.id, "7");
@@ -101,6 +121,7 @@ Deno.test("create persists only hash + metadata and reveals plaintext after regi
   assert(registeredParams[1] instanceof Uint8Array);
   assertEquals((registeredParams[1] as Uint8Array).byteLength, 32);
   assertEquals(registeredParams[2], result.label);
+  assertEquals(registeredParams[3], "native:nightly");
   assertNotEquals(registeredParams.includes(result.token), true);
   assertEquals(
     registeredParams[1],
@@ -122,6 +143,7 @@ Deno.test("authenticate performs a fresh prefix lookup and rejects immediately a
       rows: [{
         token_hash: tokenHash,
         label: "nightly agent",
+        principal: "native:nightly",
         revoked_at: revoked ? "2026-07-30T10:01:00.000Z" : null,
       }],
     };
@@ -129,6 +151,7 @@ Deno.test("authenticate performs a fresh prefix lookup and rejects immediately a
 
   assertEquals(await authenticateAccessToken(pool, token), {
     label: "nightly agent",
+    principal: "native:nightly",
   });
   revoked = true;
   assertEquals(await authenticateAccessToken(pool, token), null);
@@ -169,10 +192,39 @@ Deno.test("authenticate rejects malformed, unknown, and hash-mismatched tokens",
     rows: [{
       token_hash: tokenHash,
       label: "\u00a0padded in storage\u00a0",
+      principal: "native:nightly",
       revoked_at: null,
     }],
   }));
   assertEquals(await authenticateAccessToken(malformedLabel.pool, token), null);
+});
+
+Deno.test("authenticate rejects malformed stored principals and preserves legacy null", async () => {
+  const { token } = generateAccessToken(deterministicBytes);
+  const tokenHash = await hashAccessToken(token);
+  for (const principal of [undefined, "", "auth0|user", "native:agent\n", 42]) {
+    const fixture = makeFakePool(() => ({
+      rows: [{
+        token_hash: tokenHash,
+        label: "agent",
+        principal,
+        revoked_at: null,
+      }],
+    }));
+    assertEquals(await authenticateAccessToken(fixture.pool, token), null);
+  }
+  const legacy = makeFakePool(() => ({
+    rows: [{
+      token_hash: tokenHash,
+      label: "agent",
+      principal: null,
+      revoked_at: null,
+    }],
+  }));
+  assertEquals(await authenticateAccessToken(legacy.pool, token), {
+    label: "agent",
+    principal: null,
+  });
 });
 
 Deno.test("list never selects hashes and revoke targets one validated prefix", async () => {
@@ -185,6 +237,7 @@ Deno.test("list never selects hashes and revoke targets one validated prefix", a
           id: 9n,
           prefix: "ob1_AAECAwQF",
           label: "nightly agent",
+          principal: "native:nightly",
           created_at: "2026-07-30T10:00:00.000Z",
           revoked_at: "2026-07-30T10:02:00.000Z",
         }],
@@ -195,6 +248,7 @@ Deno.test("list never selects hashes and revoke targets one validated prefix", a
         id: 9n,
         prefix: "ob1_AAECAwQF",
         label: "nightly agent",
+        principal: "native:nightly",
         created_at: "2026-07-30T10:00:00.000Z",
         revoked_at: null,
       }],

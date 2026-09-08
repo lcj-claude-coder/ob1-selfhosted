@@ -4,6 +4,7 @@ import {
   type AuthContext,
   type AuthDoor,
   isNativeTokenLabel,
+  isNativeTokenPrincipal,
   isOAuthSubject,
 } from "./auth_context.ts";
 
@@ -17,7 +18,7 @@ import {
 //   - door:  "tailnet" when authenticated via x-brain-key;
 //            "funnel"  for an OAuth user Bearer;
 //            "service" for an OAuth client-credentials Bearer.
-//   - sub:   null on x-brain-key (native/static credential, no per-user id);
+//   - sub:   stored principal on native tokens; null on legacy/static keys;
 //            the verified JWT `sub` claim on either Bearer label (guaranteed —
 //            see `verifyBearer` below, which puts "sub" in jose's requiredClaims).
 //   - tokenLabel: the verified native-token label, otherwise null.
@@ -33,6 +34,7 @@ import {
   ENABLE_OAUTH,
   JWKS_FETCH_TIMEOUT_MS,
   MCP_ACCESS_KEY,
+  REQUIRE_TAILNET_TOKEN_MARKER,
 } from "./config.ts";
 import type { OAuthSubjectKind, OAuthSubjectLookup } from "./oauth_subjects.ts";
 import {
@@ -228,7 +230,7 @@ function checkBrainKey(provided: string | undefined): boolean {
 
 export type NativeAccessTokenVerifier = (
   token: string,
-) => Promise<{ label: string } | null>;
+) => Promise<{ label: string; principal: string | null } | null>;
 
 type VerifiedBearerPayload = JWTPayload & { sub: string };
 
@@ -517,12 +519,10 @@ async function unauthorized(
 
 // Accepts the x-brain-key door (native token and/or legacy static key) OR
 // Authorization: Bearer with a valid RS256 JWT (OAuth door, when enabled).
-// Which doors are live is per-deployment: compose-local enables x-brain-key only;
-// the funnel + Qubes deployments enable OAuth only. Caddy in front of a
-// publicly-reachable deployment does not strip credentials per branch — the
-// server simply ignores a door it wasn't configured for — so this middleware is
-// the load-bearing check; it works equally well behind a single-port deployment
-// with no proxy.
+// Public deployments require Caddy's trusted tailnet marker for x-brain-key.
+// Their app listener is private to the proxy; the marker is not a credential
+// and must never be trusted on an app port reachable by untrusted callers.
+// The supplied Caddyfile removes keys and the marker from public requests.
 //
 // Short-circuit policy: when the x-brain-key door is OFF the header is ignored
 // entirely (falls straight through to Bearer). When it's ON, an invalid
@@ -538,7 +538,10 @@ export function createRequireAuth(
     // x-brain-key fast path — cheaper than JWT crypto, but only short-circuit
     // on success, and only when the door is enabled. Failure / disabled falls
     // through to the Bearer attempt below.
-    const brainKey = c.req.header("x-brain-key");
+    const keyRouteAllowed = !REQUIRE_TAILNET_TOKEN_MARKER ||
+      (c.req.header("x-openbrain-tailnet") === "1" &&
+        c.req.header("tailscale-funnel-request") === undefined);
+    const brainKey = keyRouteAllowed ? c.req.header("x-brain-key") : undefined;
     if (ENABLE_BRAIN_KEY && brainKey && checkBrainKey(brainKey)) {
       // Tag the shared-key credential as `tailnet`. The shared x-brain-key is
       // not a per-user identity (every key holder uses the same secret), so sub
@@ -572,13 +575,17 @@ export function createRequireAuth(
     if (ENABLE_NATIVE_TOKENS && brainKey && verifyNativeToken) {
       try {
         const identity = await verifyNativeToken(brainKey);
-        if (identity && isNativeTokenLabel(identity.label)) {
+        if (
+          identity && isNativeTokenLabel(identity.label) &&
+          (identity.principal === null ||
+            isNativeTokenPrincipal(identity.principal))
+        ) {
           c.set("door", "tailnet");
-          c.set("sub", null);
+          c.set("sub", identity.principal);
           c.set("tokenLabel", identity.label);
-          // Success-side audit: the verified token label is the per-holder
-          // identity on this door (sub stays null — labels are attribution,
-          // not OAuth subjects).
+          // Audit retains token-label attribution; subject is reserved for
+          // OAuth in mcp_auth_events. Personal-memory ownership uses the stored
+          // principal carried in the request context above.
           logAuthSuccess({
             door: "tailnet",
             middleware: "require_auth",

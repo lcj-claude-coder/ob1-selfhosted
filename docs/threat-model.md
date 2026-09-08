@@ -60,8 +60,9 @@ what backs it up.
 - **Local compose** — one boundary: possession of any active native/static
   `x-brain-key` credential plus network reach. Native tokens separate rotation
   and write attribution, not authorization: every holder can use shared
-  workspace/project audiences. Personal visibility is disabled unless the
-  operator binds every holder to one deployment-wide `MCP_ACCESS_KEY_PRINCIPAL`.
+  workspace/project audiences. Personal visibility uses each native token
+  principal. Only the legacy static key uses `MCP_ACCESS_KEY_PRINCIPAL`; older
+  tokens without a principal cannot access personal/sensitive rows.
 - **Tailnet / Funnel** — the public door is allowlist-then-OAuth; the private
   door is your tailnet plus the same JWT check. One host, so the corpus and sink
   volumes share a host-root trust boundary, but the ingester itself is
@@ -69,18 +70,21 @@ what backs it up.
   container hardening
   ([`security-model.md` § Container layer](security-model.md#container-layer))
   is the only intra-host boundary.
-- **Qubes three-qube split** — the same doors, plus VM boundaries: ingress, app,
-  and db each in their own qube. The two online request/database hops ride
-  dom0-policy-gated `qubes.ConnectTCP` channels: the app qube's mcp and the db
-  qube's Postgres each bind **loopback only** (no network listener at all), dom0
-  policy names the one permitted caller per channel, and the inner gate — mcp's
-  OAuth door, Postgres's scram — authenticates what arrives. A separate fixed
-  custom qrexec service lets the app qube pull only the aggregate Funnel summary
-  from ingress for encrypted backup; it accepts no argument or stdin, and its
-  exact app→ingress allow is followed by a catch-all deny. The edge cannot
-  initiate that transfer and still has NO path to the db qube at all (no qrexec
-  rule, no credential); its raw Funnel logs remain in its local socket-only
-  sink. Detail:
+- **Qubes three-qube split** — OAuth publicly and optional native tokens
+  privately, plus VM boundaries: ingress, app, and db each in their own qube.
+  The two online request/database hops ride dom0-policy-gated `qubes.ConnectTCP`
+  channels: the app qube's mcp and the db qube's Postgres each bind **loopback
+  only** (no network listener at all), dom0 policy names the one permitted
+  caller per channel, and the inner gate — mcp's OAuth/native verifier,
+  Postgres's scram — authenticates what arrives. Native tokens require a trusted
+  marker replaced by ingress only on tailnet requests. Public requests lose keys
+  and markers. A compromised ingress can forge the marker, but still needs a
+  valid token; direct app access remains forbidden. A separate fixed custom
+  qrexec service lets the app qube pull only the aggregate Funnel summary from
+  ingress for encrypted backup; it accepts no argument or stdin, and its exact
+  app→ingress allow is followed by a catch-all deny. The edge cannot initiate
+  that transfer and still has NO path to the db qube at all (no qrexec rule, no
+  credential); its raw Funnel logs remain in its local socket-only sink. Detail:
   [`three-qube-design.md`](../deploy/qubes/three-qube-design.md#implemented-appdb-transport-qubesconnecttcp--no-listener).
 
 Full statement of both doors:

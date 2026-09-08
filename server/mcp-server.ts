@@ -138,7 +138,7 @@ timezone-qualified ISO-8601 strings.
   workspace default (or project when \`project_id\` is present).
 
 The seeded \`sensitive\` workspace is personal-only. It requires a verified
-OAuth subject, or a shared-key deployment configured with
+OAuth subject, a stored native-token principal, or a static key bound via
 \`MCP_ACCESS_KEY_PRINCIPAL\`; broader visibility is rejected.
 
 ## Artifacts — \`[[artifacts]]\` (plural) array-of-tables
@@ -291,7 +291,8 @@ export function createMcpServer(
     // 1.26.0: OAuth subject admission and revocation are database-managed.
     // Requires migration 13; OAuth-enabled upgrades import or enroll subjects
     // with subject-admin before the server roll. Legacy env lists cannot admit.
-    version: "1.26.0",
+    // 1.27.0: stable native-token principals and proxy-confined tailnet auth.
+    version: "1.27.0",
   });
 
   // ChatGPT-compatible search/fetch shapes (read-only). The standard names

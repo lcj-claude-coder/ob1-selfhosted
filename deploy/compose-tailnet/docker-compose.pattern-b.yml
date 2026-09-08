@@ -42,6 +42,7 @@ services:
       # Native x-brain-key tokens are also deliberately absent from the public
       # edge. Bearer OAuth remains the sole accepted credential class.
       ENABLE_NATIVE_TOKENS: "false"
+      REQUIRE_TAILNET_TOKEN_MARKER: "true"
       # The base compose may inherit a local single-user principal binding.
       # Clear it together with the key or config.ts correctly refuses the
       # otherwise-unused binding on this OAuth-only public deployment.

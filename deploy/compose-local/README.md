@@ -39,11 +39,11 @@ Keep `ENABLE_NATIVE_TOKENS=true`, paste the five generated database passwords,
 and leave `MCP_ACCESS_KEY` empty on a new install. That static key is supported
 as a migration bridge for older clients.
 
-To use personal visibility and the seeded `sensitive` space on this single-user
-native-token install, also set a stable, non-secret `MCP_ACCESS_KEY_PRINCIPAL`
-(for example `local-owner`). Per-client token labels provide attribution, not
-separate authorization identities; without the stable principal, personal scope
-fails closed. See [Memory spaces](../../docs/spaces.md).
+New native tokens use `--principal native:<id>` for personal and `sensitive`
+memory. Keep that principal stable across rotations; use a distinct principal
+for each role that needs isolated personal memory. `MCP_ACCESS_KEY_PRINCIPAL` is
+only for a configured legacy static key. See
+[Memory spaces](../../docs/spaces.md).
 
 The server requires `METADATA_FALLBACK_POLICY`; the copied `.env.example`
 preselects `off`, the strictest posture, so the cold-start path works without
@@ -96,7 +96,7 @@ The profile-gated administrator runs only for an explicit lifecycle command and
 has no access to memories or token hashes:
 
 ```bash
-docker compose --profile tools run --rm token-admin create "laptop client"
+docker compose --profile tools run --rm token-admin create "laptop client" --principal native:laptop
 ```
 
 Copy the printed token now; Open Brain stores only its SHA-256 digest and cannot
@@ -225,7 +225,7 @@ print("yes" if any(env.get(k) for k in ("AUTH0_ISSUER", "AUTH0_JWKS_URI", "AUTH0
 # Build the replacement while the current MCP is still serving. Migration 11
 # is intentionally incompatible with pre-1.24 recapture SQL, so quiesce MCP
 # before replaying the database files and leave it stopped on any SQL failure.
-docker compose --env-file .env build mcp subject-admin
+docker compose --env-file .env build mcp subject-admin token-admin
 # 1.25.0+: after setting OPENBRAIN_AUTH_ROLLUP_PASSWORD in .env, provision the
 # dedicated role before replaying 02-observability.sql, which now grants to it.
 bash ../../scripts/upgrade-enable-auth-rollup-role.sh .
@@ -266,9 +266,9 @@ docker compose --env-file .env exec -T postgres \
 docker compose --env-file .env exec -T postgres \
   psql -X --single-transaction -v ON_ERROR_STOP=1 -U postgres -d openbrain \
   < ../../db/13-oauth-subjects.sql
-docker compose --env-file .env exec -T postgres \
-  psql -v ON_ERROR_STOP=1 -U postgres -d openbrain \
-  < ../../db/03-grants-assertion.sql
+cat ../../db/14-native-token-principals.sql ../../db/03-grants-assertion.sql |
+  docker compose --env-file .env exec -T postgres \
+    psql -X --single-transaction -v ON_ERROR_STOP=1 -U postgres -d openbrain
 # The Compose-backed summary reads its credential inside this service. Recreate
 # Postgres once so the newly-added environment value reaches the container;
 # the named data volume is preserved.
@@ -399,3 +399,11 @@ Legacy `OAUTH_ALLOWED_SUBJECTS` / `OAUTH_SERVICE_ACCOUNT_SUBJECTS` values are
 transition inputs only; they no longer authorize or classify requests. After
 import, remove them from the deployment environment. Enrollment and revocation
 then apply on the next request without restarting the server.
+
+Server 1.27.0 also requires migration 14 for per-token principals. Remove
+`MCP_ACCESS_KEY_PRINCIPAL` if the static key is unset; native tokens no longer
+inherit it. Existing tokens retain workspace/project access but require a
+rotation with an explicit principal for personal memory. Before production
+upgrade, rehearse the migration and final assertion in one transaction and
+verify rollback. See
+[native token upgrade](../../docs/native-access-tokens.md#existing-database-upgrade).

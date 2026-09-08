@@ -1,8 +1,10 @@
 # Connecting Kimi Code to an OAuth deployment
 
-The [tailnet/Funnel](../deploy/compose-tailnet/README.md) and
-[Qubes](../deploy/qubes/README.md) install paths are **OAuth-only** — native and
-static `x-brain-key` verification are disabled. The
+The public Funnel branch always requires OAuth. Single-host
+[Pattern B](../deploy/compose-tailnet/README.md) also uses OAuth on the tailnet;
+[split Qubes](../deploy/qubes/README.md) can optionally enable
+[native tokens](native-access-tokens.md) on its private branch. This guide
+covers the OAuth client path. The
 [compose-tailnet runbook](../deploy/compose-tailnet/README.md#connect-claudeai--claude-mobile)
 covers connecting **claude.ai / Claude mobile** (a confidential client), and
 [codex-oauth-client.md](codex-oauth-client.md) covers a local **Codex CLI** (a
@@ -143,9 +145,9 @@ launch-time mint-and-cache helper is a separate small script, not that one.
   that can already reach the deployment's `.ts.net` MCP URL. On a
   tailnet-connected host, MagicDNS resolves that hostname to the server's
   private tailnet address; OAuth still terminates at the provider, and the
-  tailnet path is not an auth bypass. Header forwarding is transport behavior;
-  the **server** decides which doors a deployment enables — an OAuth-only
-  deployment ignores `X-Brain-Key` entirely.
+  tailnet path is not an auth bypass. Caddy forwards OAuth on both allowed
+  branches, strips native credentials publicly, and sets the trusted marker
+  privately; the server still verifies every credential.
 - This does **not** authorize cloud-hosted agent workers. Keep public cloud
   ingress disabled.
 - Kimi Code supports `bearerTokenEnvVar` for HTTP MCP servers — a **static**

@@ -765,3 +765,15 @@ corresponding evidence; init scripts correctly do not rerun on recreation. The
 marker proves that this trusted gate passed once, not that the catalog has been
 continuously attested since. A full database superuser can skip or undo the same
 check and is outside its authorization boundary.
+
+## Native-token branch confinement (1.27.0)
+
+The mounted `deploy/compose-tailnet/Caddyfile` discards client-supplied
+`X-OpenBrain-Tailnet` everywhere and `X-Brain-Key` on Funnel requests, and sets
+`X-OpenBrain-Tailnet: 1` only on the tailnet upstream. OAuth is forwarded on
+both branches. This marker is trusted because the application has no untrusted
+direct route; keep ingress and app loopback listeners and their qrexec policy
+unchanged. Apply and verify ingress confinement before enabling native tokens on
+the app. Use the
+[branch matrix and rollback order](../../../docs/native-access-tokens.md#split-qubes-deployment);
+the public IP allowlist remains mandatory.

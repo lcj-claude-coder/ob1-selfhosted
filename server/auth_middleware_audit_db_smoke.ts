@@ -100,7 +100,11 @@ const admissionPool = new Pool({
 }, 1);
 const requireAuth = createRequireAuth(
   (token: string) =>
-    Promise.resolve(token === NATIVE_SECRET ? { label: NATIVE_LABEL } : null),
+    Promise.resolve(
+      token === NATIVE_SECRET
+        ? { label: NATIVE_LABEL, principal: "native:audit-smoke" }
+        : null,
+    ),
   (subject) => lookupOAuthSubject(admissionPool, subject),
 );
 

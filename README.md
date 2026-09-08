@@ -18,7 +18,7 @@ laptop" to "compartmentalized Qubes OS deployment with a hardened public edge":
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
 | **Local compose**    | Postgres + MCP server + Ollama on one box (bound to loopback only by default — the LAN can't reach it directly), with labeled, independently revocable native tokens (no Auth0 tenant needed). Runs anywhere Docker runs — including a work machine where a tailnet or hosted IdP isn't practical. | [`deploy/compose-local/`](deploy/compose-local/README.md)     |
 | **Tailnet / Funnel** | The same stack exposed to claude.ai and Claude mobile over the public internet via Tailscale Funnel + Caddy + OAuth (RS256 JWT) + an Anthropic egress IP allowlist. **OAuth is the only auth door** here — native and static `x-brain-key` verification are disabled on the public edge.           | [`deploy/compose-tailnet/`](deploy/compose-tailnet/README.md) |
-| **Qubes OS**         | The stack split across ingress / app / database qubes, with the persistence and SELinux gotchas solved. Also OAuth-only, like the Funnel path.                                                                                                                                                     | [`deploy/qubes/`](deploy/qubes/README.md)                     |
+| **Qubes OS**         | The stack split across ingress / app / database qubes, with the persistence and SELinux gotchas solved. OAuth publicly; optional native tokens with stable per-role principals on the tailnet branch.                                                                                              | [`deploy/qubes/`](deploy/qubes/README.md)                     |
 
 > [!IMPORTANT]
 > **The Tailnet / Funnel and Qubes OS paths need two external accounts before
@@ -184,7 +184,7 @@ detail — both auth branches, step by step — is in
   Funnel. See [REST API](#rest-api-apiv1) below.
 - **Local embeddings** — Ollama (`nomic-embed-text`, 768-dim by default),
   in-stack or on another box.
-- **Two auth doors, one per deployment** — hash-only, labeled,
+- **OAuth and native tokens** — hash-only, labeled,
   [rotatable native tokens](docs/native-access-tokens.md) in `x-brain-key` for
   the simple single-box local install (with the static key retained as a
   migration bridge), or OAuth resource-server validation (RS256 JWT via JWKS) as
@@ -412,7 +412,7 @@ CORS-terminating layer in front.
 curl -s -X POST http://127.0.0.1:8787/api/v1/thoughts \
   -H "x-brain-key: $OPENBRAIN_TOKEN" -H "content-type: application/json" \
   -d '{"content":"REST smoke test","provenance":{"author":"release engineering","agent":"codex","repo":"example/open-brain","branch":"main"}}'
-# → {"id":"…","metadata":{…,"source":"rest","door":"tailnet","sub":null,
+# → {"id":"…","metadata":{…,"source":"rest","door":"tailnet","sub":"native:laptop",
 #      "token_label":"laptop client",
 #      "provenance":{"schema_version":1,"caller_asserted":{"author":"release engineering",…}}}}
 
@@ -422,8 +422,8 @@ curl -s -X POST http://127.0.0.1:8787/api/v1/thoughts/search \
 # → hybrid semantic/exact-text matches from that repo, excluding rows whose author OR agent matches
 ```
 
-With `MCP_ACCESS_KEY_PRINCIPAL` configured on a local native-token deployment, a
-particularly sensitive capture is explicit and personal:
+With an explicit principal on a native token, a particularly sensitive capture
+is explicit and personal:
 
 ```sh
 curl -s -X POST http://127.0.0.1:8787/api/v1/thoughts \
@@ -451,7 +451,7 @@ docker compose up -d ollama   # reserves an NVIDIA GPU — on a CPU-only box, co
                               # `deploy:` block under `ollama:` (see deploy/compose-local/README.md)
 docker compose exec ollama ollama pull nomic-embed-text
 docker compose up -d
-docker compose --profile tools run --rm token-admin create "laptop client"
+docker compose --profile tools run --rm token-admin create "laptop client" --principal native:laptop
 curl http://127.0.0.1:8787/health
 ```
 
@@ -489,18 +489,17 @@ transport-level `401` per the MCP authorization spec):
 
 On the **local single-box install**, anyone with network reach and an active
 native token can enter the same workspace/project trust boundary. Tokens are
-individually labeled and revocable, but labels are attribution—not separate
-authorization principals—so personal spaces remain disabled unless the operator
-deliberately binds the door to one deployment-wide `MCP_ACCESS_KEY_PRINCIPAL`.
-Treat each token like a database password. On any **Funnel or Qubes** deployment
-the entire `x-brain-key` door is disabled: a valid RS256 JWT supplies a verified
-`sub`, whether it represents an interactive user or a
-[client-credentials service account](docs/service-account-oauth-client.md), and
-PostgreSQL RLS partitions personal rows by that subject while workspace/project
-rows follow the requested registered scope. Successful writes stamp native-token
-labels, machine JWTs as `service`, and user JWTs as `funnel`; these are
-credential/provenance labels, not Caddy route evidence. The Anthropic-egress IP
-allowlist still restricts the public door before auth. Thought `author` /
+individually labeled and revocable, with explicit stable principals that isolate
+personal thoughts and sessions and survive rotation. Workspace/project audiences
+remain shared. The static key's optional `MCP_ACCESS_KEY_PRINCIPAL` never
+applies to native tokens. On **Funnel**, OAuth plus the Anthropic IP allowlist
+remains mandatory. **Qubes** additionally supports native tokens on its tailnet
+branch, confined by the supplied Caddyfile and a backend marker requirement. An
+OAuth JWT supplies its own verified subject, whether user or
+[service account](docs/service-account-oauth-client.md). Successful writes stamp
+native-token labels, machine JWTs as `service`, and user JWTs as `funnel`; these
+are credential/provenance labels, not Caddy route evidence. The Anthropic-egress
+IP allowlist still restricts the public door before auth. Thought `author` /
 `agent` / `repo` / `branch` provenance remains a caller assertion, not
 authenticated identity. Every Pattern B install writes Caddy request metadata to
 a separate socket-only log cluster; the corpus schema rejects those tables and

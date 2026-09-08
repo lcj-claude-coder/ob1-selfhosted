@@ -35,7 +35,7 @@ type WorkspaceRow = {
 };
 
 export function trustedPrincipal(auth: AuthIdentity): string | null {
-  if (auth.door !== "tailnet") return auth.sub;
+  if (auth.door !== "tailnet" || auth.tokenLabel !== null) return auth.sub;
   // The static key is shared and therefore is not an identity by itself. Only
   // explicit server configuration may bind that door to a stable principal.
   return MCP_ACCESS_KEY_PRINCIPAL || null;

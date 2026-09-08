@@ -20,13 +20,16 @@ esac
 
 if [[ "$phase" == "all" || "$phase" == "tokens" ]]; then
 smoke_step "Smoke test — native token lifecycle is hash-only and least-privilege"
+bash scripts/ci/native_token_upgrade_smoke.sh
 # Reapply the migration to pin the existing-database/idempotency path,
 # re-check catalog grants, then exercise register/list/revoke through
 # the real dedicated and application roles inside a rollback.
 apply_sql db/08-access-tokens.sql >/dev/null
+apply_sql db/14-native-token-principals.sql >/dev/null
 apply_sql db/03-grants-assertion.sql >/dev/null
 apply_sql db/access-tokens-smoke.sql >/dev/null
 run_deno_db_smoke server/access_tokens_db_smoke.ts
+run_deno_db_smoke server/native_token_scope_db_smoke.ts
 echo "native token registration, driver hashing, redacted listing, one-way revocation, and grants passed"
 fi
 

@@ -17,7 +17,8 @@ export type AuthContext = {
   // These labels identify the verified credential class, not Caddy's network
   // branch; both OAuth labels can arrive over a private tailnet route.
   door: AuthDoor;
-  // Verified JWT subject on either OAuth label; null on the native/static label.
+  // Verified JWT subject or stored native-token principal. Null for the static
+  // key and legacy native tokens created before per-token principals existed.
   sub: string | null;
   // Server-verified label for a native rotatable token. Static shared keys and
   // both OAuth credential classes carry null. This is attribution only, not a
@@ -69,6 +70,15 @@ export function isNativeTokenLabel(value: unknown): value is string {
   return true;
 }
 
+// Operator-assigned, stable across rotations; never derived from a token or
+// its attribution label. The explicit namespace prevents accidentally binding
+// a native token to an existing Auth0 user or M2M subject.
+export function isNativeTokenPrincipal(value: unknown): value is string {
+  return typeof value === "string" &&
+    value.trim() === value &&
+    /^native:[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(value);
+}
+
 // Shared defensive gate for MCP and REST. `requireAuth` establishes this
 // invariant first; checking it again where the Hono context becomes a service
 // argument prevents a future middleware refactor from smuggling malformed
@@ -80,12 +90,14 @@ export function authContextFromValues(
 ): AuthContext | null {
   if (!isAuthDoor(door)) return null;
   if (door === "tailnet") {
-    if (sub !== null && sub !== undefined) return null;
     if (tokenLabel === null || tokenLabel === undefined) {
-      return { door, sub: null, tokenLabel: null };
+      return sub === null || sub === undefined
+        ? { door, sub: null, tokenLabel: null }
+        : null;
     }
-    return isNativeTokenLabel(tokenLabel)
-      ? { door, sub: null, tokenLabel }
+    return isNativeTokenLabel(tokenLabel) &&
+        (sub === null || isNativeTokenPrincipal(sub))
+      ? { door, sub, tokenLabel }
       : null;
   }
   if (tokenLabel !== null && tokenLabel !== undefined) return null;

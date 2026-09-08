@@ -23,11 +23,15 @@ on:
   pull_request:
     paths:
       - "deploy/compose-tailnet/Caddyfile"
+      - "deploy/compose-tailnet/caddy/Dockerfile"
+      - "scripts/ci/caddy_native_confinement_test.py"
       - ".github/workflows/allowlist-guard.yml"
   push:
     branches: [main]
     paths:
       - "deploy/compose-tailnet/Caddyfile"
+      - "deploy/compose-tailnet/caddy/Dockerfile"
+      - "scripts/ci/caddy_native_confinement_test.py"
       - ".github/workflows/allowlist-guard.yml"
   workflow_dispatch:
 
@@ -79,3 +83,6 @@ jobs:
             exit 1
           fi
           echo "OK: active Anthropic IP allowlist matchers present in $CADDYFILE"
+
+      - name: Verify native tokens are confined to the tailnet branch
+        run: python3 scripts/ci/caddy_native_confinement_test.py

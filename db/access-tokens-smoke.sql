@@ -1,4 +1,4 @@
--- Live-catalog smoke for db/08-access-tokens.sql. Run as the database owner.
+-- Live-catalog smoke for migrations 08 and 14. Run as the database owner.
 -- Every mutation is rolled back.
 
 \set ON_ERROR_STOP on
@@ -7,11 +7,11 @@ BEGIN;
 
 SET LOCAL ROLE openbrain_token_admin;
 
-SELECT id, prefix, label, created_at
+SELECT id, prefix, label, principal, created_at
 FROM native_auth.register_access_token(
   'ob1_AAAAAAAA',
   decode(repeat('11', 32), 'hex'),
-  'ci-client'
+  'ci-client', 'native:ci-client'
 );
 
 -- SQL and JavaScript both count Unicode code points, so 65 astral characters
@@ -25,7 +25,7 @@ BEGIN
   PERFORM * FROM native_auth.register_access_token(
     'ob1_UNICODE1',
     decode(repeat('33', 32), 'hex'),
-    astral_label
+    astral_label, 'native:ci-client'
   );
   IF NOT EXISTS (
     SELECT 1
@@ -41,7 +41,7 @@ BEGIN
     PERFORM * FROM native_auth.register_access_token(
       'ob1_TOOLONG1',
       decode(repeat('44', 32), 'hex'),
-      repeat(U&'\+01F600', 129)
+      repeat(U&'\+01F600', 129), 'native:ci-client'
     );
     RAISE EXCEPTION 'database accepted a 129-code-point token label';
   EXCEPTION WHEN check_violation THEN
@@ -52,7 +52,7 @@ BEGIN
     PERFORM * FROM native_auth.register_access_token(
       'ob1_PADDED01',
       decode(repeat('55', 32), 'hex'),
-      U&'\00A0padded\00A0'
+      U&'\00A0padded\00A0', 'native:ci-client'
     );
     RAISE EXCEPTION 'database accepted an NBSP-padded token label';
   EXCEPTION WHEN check_violation THEN
@@ -63,7 +63,7 @@ BEGIN
     PERFORM * FROM native_auth.register_access_token(
       'ob1_CONTROL1',
       decode(repeat('66', 32), 'hex'),
-      U&'bad\0085label'
+      U&'bad\0085label', 'native:ci-client'
     );
     RAISE EXCEPTION 'database accepted a C1 control in a token label';
   EXCEPTION WHEN check_violation THEN
@@ -79,6 +79,7 @@ BEGIN
     FROM native_auth.access_token
     WHERE prefix = 'ob1_AAAAAAAA'
       AND label = 'ci-client'
+      AND principal = 'native:ci-client'
       AND revoked_at IS NULL
   ) THEN
     RAISE EXCEPTION 'token admin could not list registered token metadata';
@@ -116,7 +117,7 @@ $block$ LANGUAGE plpgsql;
 RESET ROLE;
 SET LOCAL ROLE openbrain_app;
 
-SELECT prefix, token_hash, label, revoked_at
+SELECT prefix, token_hash, label, principal, revoked_at
 FROM native_auth.access_token
 WHERE prefix = 'ob1_AAAAAAAA';
 

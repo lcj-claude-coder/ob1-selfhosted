@@ -198,21 +198,19 @@ its three scope fields stay inside `toml_text`.
 OAuth requests use the verified JWT `sub`; this applies equally to user tokens
 and [client-credentials service accounts](service-account-oauth-client.md). A
 dedicated M2M application therefore owns its personal rows under its stable
-client subject. Native `x-brain-key` tokens have distinct server-verified labels
-and revocation state, but those labels are attribution rather than authorization
-identities; the legacy static key likewise identifies no person. A local
-native/static deployment can opt into personal/sensitive memory by binding that
-whole door to one stable, server-controlled subject:
+client subject. Native tokens instead use an explicit database principal,
+`native:<id>`, independent of their secret and label. Reusing that principal
+when rotating a token preserves personal ownership. Different principals cannot
+read one another's personal thoughts or sessions. Reserve the `native:`
+namespace when assigning subjects in custom OIDC issuers to avoid collisions.
 
-```dotenv
-MCP_ACCESS_KEY_PRINCIPAL=local-owner
-```
-
-The value is deployment-wide, is never accepted from caller input, and requires
-native tokens or `MCP_ACCESS_KEY` to be enabled. Leave it blank when different
-credential holders should not be treated as one person. Without a verified or
-configured principal, personal scope and the `sensitive` workspace fail with a
-validation error.
+Older native tokens retain `principal=NULL`: workspace/project access remains,
+but personal and `sensitive` access fails closed. `MCP_ACCESS_KEY_PRINCIPAL`
+applies only when the legacy static `MCP_ACCESS_KEY` is configured. It is never
+a fallback for a native token, and a native-only installation must remove that
+setting before upgrading to 1.27.0. Existing personal rows retain their old
+owners; there is no automatic reassignment. See
+[native-token migration and rotation](native-access-tokens.md).
 
 ## Registering workspaces and projects
 

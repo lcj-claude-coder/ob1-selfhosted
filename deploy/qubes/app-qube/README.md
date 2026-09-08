@@ -162,14 +162,12 @@ Upgrades also require an explicit `METADATA_FALLBACK_POLICY` in the app-qube
 `.env`; an unset value deliberately prevents the new container from starting.
 
 Server 1.19.0 also requires `db/08-access-tokens.sql` on the DB qube followed by
-`db/03-grants-assertion.sql`. This Qubes posture stays OAuth-only:
-`ENABLE_NATIVE_TOKENS=false` is pinned in compose and `MCP_ACCESS_KEY` remains
-absent, so the new schema does not add an accepted credential at the public
-edge. See
-[Native access tokens](../../../docs/native-access-tokens.md#existing-database-upgrade)
-for what the schema contains, and
-[Upgrading an existing deployment](#upgrading-an-existing-deployment) for how to
-apply it in this topology.
+`db/03-grants-assertion.sql` after all subsequent migrations. Server 1.27.0 also
+requires `db/14-native-token-principals.sql`. Native verification is opt-in
+(`ENABLE_NATIVE_TOKENS=false` by default); the marker requirement is pinned true
+and the static key remains absent. Follow the
+[confined native-token rollout](../../../docs/native-access-tokens.md#split-qubes-deployment)
+before enabling it. Public Funnel stays OAuth-only.
 
 Server 1.20.0 introduced the allowed+denied audit shape in
 `db/02-observability.sql`. Server 1.26.0 also requires
@@ -281,18 +279,19 @@ before the relations it asserts on exist. The db qube records the same canonical
 order
 ([First boot / provisioning](../db-qube/README.md#first-boot--provisioning)).
 
-| Server              | Migration                                                                  | Additional requirement                                                                                                                                    |
-| ------------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1.7.0               | `db/05-hybrid-search.sql`                                                  | pgvector 0.8.0+ (filtered iterative scans)                                                                                                                |
-| 1.9.0               | `db/06-spaces.sql`                                                         | PostgreSQL 15+ (`NULLS NOT DISTINCT`); superuser, not owner                                                                                               |
-| 1.16.0              | `db/07-metadata-degradation.sql`                                           | from 1.17.0, an explicit `METADATA_FALLBACK_POLICY` in `.env`                                                                                             |
-| 1.19.0              | `db/08-access-tokens.sql`                                                  | —                                                                                                                                                         |
-| 1.20.0 (historical) | `db/02-observability.sql` (re-apply; converges `mcp_auth_events` in place) | historical env admission; current upgrades must import it into migration 13 before rolling MCP                                                            |
-| Arc B               | `db/02-observability.sql`, then `db/09-retire-corpus-funnel.sql`           | sink cutover complete; both legacy tables archived, verified, and empty; retired HBA rules removed                                                        |
-| 1.22.0              | `db/10-thought-mutations.sql`                                              | superuser (table-owner SECURITY DEFINER helper; narrows the app's thoughts UPDATE to content columns); rerun `03-grants-assertion.sql` after              |
-| 1.24.0              | `db/11-session-update-grants.sql`                                          | database owner; narrows session UPDATE to content columns and removes artifact UPDATE; rerun `03-grants-assertion.sql` after                              |
-| 1.25.0              | `db/12-auth-audit-grants.sql`                                              | first provision `openbrain_auth_rollup` and install/reload its HBA lines; rerun `03-grants-assertion.sql` after                                           |
-| 1.26.0              | `db/13-oauth-subjects.sql`                                                 | required with OAuth on or off; provision credential administrator and HBA first, then migrate/assert and import/verify OAuth subjects before the MCP roll |
+| Server              | Migration                                                                  | Additional requirement                                                                                                                                                 |
+| ------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.7.0               | `db/05-hybrid-search.sql`                                                  | pgvector 0.8.0+ (filtered iterative scans)                                                                                                                             |
+| 1.9.0               | `db/06-spaces.sql`                                                         | PostgreSQL 15+ (`NULLS NOT DISTINCT`); superuser, not owner                                                                                                            |
+| 1.16.0              | `db/07-metadata-degradation.sql`                                           | from 1.17.0, an explicit `METADATA_FALLBACK_POLICY` in `.env`                                                                                                          |
+| 1.19.0              | `db/08-access-tokens.sql`                                                  | —                                                                                                                                                                      |
+| 1.20.0 (historical) | `db/02-observability.sql` (re-apply; converges `mcp_auth_events` in place) | historical env admission; current upgrades must import it into migration 13 before rolling MCP                                                                         |
+| Arc B               | `db/02-observability.sql`, then `db/09-retire-corpus-funnel.sql`           | sink cutover complete; both legacy tables archived, verified, and empty; retired HBA rules removed                                                                     |
+| 1.22.0              | `db/10-thought-mutations.sql`                                              | superuser (table-owner SECURITY DEFINER helper; narrows the app's thoughts UPDATE to content columns); rerun `03-grants-assertion.sql` after                           |
+| 1.24.0              | `db/11-session-update-grants.sql`                                          | database owner; narrows session UPDATE to content columns and removes artifact UPDATE; rerun `03-grants-assertion.sql` after                                           |
+| 1.25.0              | `db/12-auth-audit-grants.sql`                                              | first provision `openbrain_auth_rollup` and install/reload its HBA lines; rerun `03-grants-assertion.sql` after                                                        |
+| 1.26.0              | `db/13-oauth-subjects.sql`                                                 | required with OAuth on or off; provision credential administrator and HBA first, then migrate/assert and import/verify OAuth subjects before the MCP roll              |
+| 1.27.0              | `db/14-native-token-principals.sql`                                        | required with tokens on or off; explicit token principal, fail-closed legacy identity, final grants assertion; deploy ingress confinement before enabling the app flag |
 
 Server 1.26.0 additionally requires `db/13-oauth-subjects.sql` **even when OAuth
 is disabled**.
