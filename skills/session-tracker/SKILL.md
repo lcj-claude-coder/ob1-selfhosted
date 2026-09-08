@@ -67,11 +67,16 @@ end the work session.
   force an off-cadence save while work continues. A pure lookup or status query
   does not force a write either.
 
-Keep the counter and pending changes in working context. On resume, continue
-from a counter available in the restored conversation or local handoff context;
-context compaction and tool calls do not reset it. If the count is unavailable,
-restart at turn 1 for the resumed work without creating a new session record. Do
-not add schema fields or perform an extra Open Brain write, lookup, or full
+Keep the number of completed substantive turns and pending changes in working
+context. Continue a counter only when its exact value was explicitly carried
+forward in the conversation or local handoff, including a compaction summary;
+do not infer a count from a prose recap. Resuming, context compaction, and tool
+calls do not reset a known counter. If the count is missing or uncertain, even
+after compaction within the same conversation, restart at turn 1 for the
+continuing work without creating a new session record. This repeats the first
+three checkpoints before returning to every-third-turn saves.
+
+Do not add schema fields or perform an extra Open Brain write, lookup, or full
 transcript scan just to maintain or reconstruct the counter. Recover the
 existing record's `id` and scope through the normal resume path before saving.
 
