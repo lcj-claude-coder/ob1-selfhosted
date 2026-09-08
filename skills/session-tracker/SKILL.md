@@ -1,6 +1,6 @@
 ---
 name: session-tracker
-description: "Use when starting, resuming, or wrapping up an agent/coding work session — and on cues like \"where did I leave off\", \"resume the X work\", \"what's awaiting review\", \"save this session\", \"what was I doing on <branch>\". Captures and restores structured session state via Open Brain's session_* MCP tools. State lives in Open Brain's canonical `sessions` store; TOML front matter is the interchange format."
+description: "Use when starting, resuming, or wrapping up an agent/coding work session — and on cues like \"where did I leave off\", \"resume the X work\", \"what's awaiting review\", \"save this session\", \"what was I doing on this branch\". Captures and restores structured session state via Open Brain's session_* MCP tools. State lives in Open Brain's canonical `sessions` store; TOML front matter is the interchange format."
 ---
 
 # Session Tracker
@@ -34,6 +34,47 @@ call should provide the known caller-asserted `author` / `agent` / `repo` /
 `branch` values and omit unknowns; the server keeps them distinct from verified
 transport identity. See
 [`docs/thought-provenance.md`](../../docs/thought-provenance.md).
+
+## Save cadence
+
+Loading this skill or reading a session does not itself require a write. Treat
+Open Brain as a checkpoint index; the harness transcript usually retains the
+intervening work, subject to the verification rules below.
+
+Count **substantive user/assistant turns** for the current work session: one
+user request and the assistant's work responding to it, regardless of tool
+calls, progress messages, or automatic continuations. A turn is substantive
+when actual work happened on the machine, or the goal, decisions, blockers, or
+next actions changed. Pure greetings, thanks, and goodbyes neither advance the
+counter nor trigger a save. An assistant final response ends a turn; it does
+not necessarily end the work session.
+
+- Save at the end of each of the first three substantive turns.
+- Then save every third substantive turn: **6, 9, 12, …**. Between checkpoints,
+  retain changes in working context rather than issuing session writes.
+- Honor an explicit user request to save immediately, even off cadence or with
+  no new work. It does not reset the regular counter.
+- Save the **final significant turn** when finishing the task, handing off,
+  pausing for review, or stopping on a blocker. Include the current state and
+  what comes next. If an ending becomes apparent later, flush any still-unsaved
+  substantive work once; do not rewrite an already-current record for a goodbye.
+- Coalesce coinciding triggers into one write using the latest state. A commit,
+  test run, tool result, or ordinary plan adjustment does not independently
+  force an off-cadence save while work continues. A pure lookup or status query
+  does not force a write either.
+
+Keep the counter and pending changes in working context. On resume, continue
+from a counter available in the restored conversation or local handoff context;
+context compaction and tool calls do not reset it. If the count is unavailable,
+restart at turn 1 for the resumed work without creating a new session record.
+Do not add schema fields or perform an extra Open Brain write, lookup, or full
+transcript scan just to maintain or reconstruct the counter. Recover the
+existing record's `id` and scope through the normal resume path before saving.
+
+A failed save is not a checkpoint: retain pending changes and report the
+failure. Retry when the cause is resolved, on the next scheduled checkpoint,
+or when explicitly asked; avoid a per-turn retry loop. Cadence never licenses
+inventing a resumable handle or claiming an unsaved change is stored.
 
 ## Mental model
 
@@ -318,6 +359,9 @@ title = "Benchmark: sliding-window vs token-bucket"
 
 ## Capturing a session
 
+Apply the [save cadence](#save-cadence) before assembling a payload. A due save
+includes all pending substantive changes, not just the latest turn.
+
 1. Populate `repo_url`, `branch`, and `head` from the **live checkout**
    (`git rev-parse`, `git branch --show-current`), not memory or returned
    `raw_toml`. For a new record or replacement handle, take `harness`,
@@ -441,6 +485,11 @@ record.
   pre-filters and `threshold` minimum cosine similarity, default `0.5`).
 
 ## Lifecycle
+
+The same [save cadence](#save-cadence) governs lifecycle writes. When a due save
+changes only status, use `session_update_status`; when it also changes context
+or artifacts, use one `session_capture` with the new status. Do not issue both
+for the same checkpoint or use status writes to bypass throttling.
 
 - Quick transitions (e.g. mark `done` after a PR merges, or `blocked` when
   stuck) → `session_update_status(id, status, scope={…})`. Usable from any
