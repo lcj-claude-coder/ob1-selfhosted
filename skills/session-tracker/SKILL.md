@@ -497,10 +497,14 @@ record.
 
 ## Lifecycle
 
-The same [save cadence](#save-cadence) governs lifecycle writes. When a due save
-changes only status, use `session_update_status`; when it also changes context
-or artifacts, use one `session_capture` with the new status. Do not issue both
-for the same checkpoint or use status writes to bypass throttling.
+The same [save cadence](#save-cadence) governs lifecycle writes. A transition
+that ends work, pauses for review, or stops on a blocker is a final-significant-turn
+trigger and saves immediately. A mid-work status change waits for the next
+otherwise-applicable checkpoint.
+
+Use `session_update_status` only when status is the sole pending change. If any
+context or artifact changes are also pending, use one `session_capture` that
+includes them and the new status. Do not issue both for the same checkpoint.
 
 - Quick transitions (e.g. mark `done` after a PR merges, or `blocked` when
   stuck) → `session_update_status(id, status, scope={…})`. Usable from any
