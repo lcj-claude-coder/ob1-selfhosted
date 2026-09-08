@@ -1,6 +1,6 @@
 ---
 name: session-tracker
-description: "Use when starting, resuming, or wrapping up an agent/coding work session — and on cues like \"where did I leave off\", \"resume the X work\", \"what's awaiting review\", \"save this session\", \"what was I doing on <branch>\". Captures and restores structured session state via Open Brain's session_* MCP tools. State lives in Open Brain's canonical `sessions` store; TOML front matter is the interchange format."
+description: "Use when starting, resuming, or wrapping up an agent/coding work session — and on cues like \"where did I leave off\", \"resume the X work\", \"what's awaiting review\", \"save this session\", \"what was I doing on this branch\". Captures and restores structured session state via Open Brain's session_* MCP tools. State lives in Open Brain's canonical `sessions` store; TOML front matter is the interchange format."
 ---
 
 # Session Tracker
@@ -34,6 +34,73 @@ call should provide the known caller-asserted `author` / `agent` / `repo` /
 `branch` values and omit unknowns; the server keeps them distinct from verified
 transport identity. See
 [`docs/thought-provenance.md`](../../docs/thought-provenance.md).
+
+## Save cadence
+
+Loading this skill or reading a session does not itself require a write. Treat
+Open Brain as a checkpoint index; the harness transcript usually retains the
+intervening work, subject to the
+[resumable-handle verification rules](#the-resumable-handle-session_id).
+
+Count **substantive user/assistant turns** for the current work session: one
+user request and the assistant's work responding to it, regardless of tool
+calls, progress messages, or automatic continuations. A turn is substantive when
+actual task work happened on the machine, or the goal, decisions, blockers, or
+next actions changed. Bookkeeping-only turns (lookups/status queries that change
+no session context, or explicit saves without new task work) do not advance the
+counter. Pure greetings, thanks, and goodbyes neither advance the counter nor
+trigger a save. An assistant final response ends a turn; it does not necessarily
+end the work session.
+
+- Save at the end of each of the first three substantive turns.
+- Then save every third substantive turn: **6, 9, 12, …**. Between checkpoints,
+  retain changes in working context rather than issuing session writes.
+- Honor an explicit user request to save immediately, even off cadence or with
+  no new work. Explicit requests take precedence over the greeting/goodbye no-op
+  rules. They do not reset the regular counter.
+- Save the **final significant turn** when finishing the task, handing off,
+  pausing for review, or stopping on a blocker. Include the current state and
+  what comes next. If an ending becomes apparent later, flush any still-unsaved
+  substantive work once; do not rewrite an already-current record for a goodbye
+  alone.
+- Coalesce coinciding triggers into one write using the latest state. A commit,
+  test run, tool result, or ordinary plan adjustment does not independently
+  force an off-cadence save while work continues. A pure lookup or status query
+  does not force a write either.
+
+Keep the number of completed substantive turns and pending changes in working
+context. Continue a counter only when its exact value was explicitly carried
+forward in the conversation or local handoff, including a compaction summary; do
+not infer a count from a prose recap. Resuming, context compaction, and tool
+calls do not reset a known counter. If the count is missing or uncertain, even
+after compaction within the same conversation, restart at turn 1 for the
+continuing work without creating a new session record. This repeats the first
+three checkpoints before returning to every-third-turn saves.
+
+Do not add schema fields or perform an extra Open Brain write, lookup, or full
+transcript scan just to maintain or reconstruct the counter. Recover the
+existing record's `id` and scope through the normal resume path before saving.
+
+Distinguish a definite rejection (known not to have committed) from an unknown
+save outcome. For a definite rejection, retain pending changes and report the
+failure. Retry when the cause is resolved, on the next scheduled checkpoint, or
+when explicitly asked; avoid a per-turn retry loop.
+
+For an unknown outcome from either `session_capture` or `session_update_status`
+(timeout, transport error, or lost response), reconcile in the original scope
+before any retry. Use `session_lookup` with the known `id`; if the initial
+capture's ID was never received, use branch lookup or `session_search` to
+recover the matching record's `id` and current structured state. Verify the
+match against the known work-thread context; a branch/search hit alone is not
+proof. If the intended state is already stored, skip the retry. Any necessary
+recapture uses the recovered ID and the full replacement contract, including all
+pending changes; use a status-only update only when status is the sole pending
+change. If reconciliation cannot establish the outcome or matching record,
+retain pending work and report the uncertainty without blindly writing again. A
+missing search result does not establish that the write was rejected.
+
+An unverified save is not a confirmed checkpoint. Cadence never licenses
+inventing a resumable handle or claiming an unsaved change is stored.
 
 ## Mental model
 
@@ -318,6 +385,11 @@ title = "Benchmark: sliding-window vs token-bucket"
 
 ## Capturing a session
 
+Apply the [save cadence](#save-cadence) before assembling a payload. Every save
+— scheduled, explicit, final, or retried — includes all pending substantive
+changes, not just the latest turn. Follow the full replacement contract below to
+retain existing fields and artifacts.
+
 1. Populate `repo_url`, `branch`, and `head` from the **live checkout**
    (`git rev-parse`, `git branch --show-current`), not memory or returned
    `raw_toml`. For a new record or replacement handle, take `harness`,
@@ -354,11 +426,13 @@ title = "Benchmark: sliding-window vs token-bucket"
    > optional resumable handle — not the upsert key; omitting it never
    > duplicates.)
 
-   > ⚠️ **A record whose `id` you've lost** — you didn't stash it, or you're
-   > picking the thread up on another machine — takes the insert path on a
-   > straight re-capture and mints a _duplicate_, orphaning the existing DB row.
-   > First recover the row's `id` (`session_lookup(branch="…")` or
-   > `session_search`) and put it in the TOML's `id =` line; then capture.
+   > ⚠️ **A record whose `id` you've lost or never received** — including an
+   > initial capture whose response was lost — takes the insert path on a
+   > straight re-capture and can mint a _duplicate_, orphaning the existing DB
+   > row. First recover the matching row's `id` and current state
+   > (`session_lookup(branch="…")` or `session_search`, in the original scope).
+   > Apply the reconciliation rules above: skip an already-satisfied retry and
+   > include the recovered `id` on any necessary recapture.
 
 5. Don't author provenance — the server stamps `source` / `source_node`.
 
@@ -442,6 +516,15 @@ record.
 
 ## Lifecycle
 
+The same [save cadence](#save-cadence) governs lifecycle writes. A transition
+that ends work, pauses for review, or stops on a blocker is a
+final-significant-turn trigger and saves immediately. A mid-work status change
+waits for the next otherwise-applicable checkpoint.
+
+Use `session_update_status` only when status is the sole pending change. If any
+context or artifact changes are also pending, use one `session_capture` that
+includes them and the new status. Do not issue both for the same checkpoint.
+
 - Quick transitions (e.g. mark `done` after a PR merges, or `blocked` when
   stuck) → `session_update_status(id, status, scope={…})`. Usable from any
   surface with no checkout; it writes the new structured `status` straight to
@@ -458,6 +541,8 @@ pattern.
 
 - **Never claim a session was captured/updated unless the tool returned
   success.** Surface the actual return (`created`, `reembedded`, `status`).
+  After an unknown write outcome, report the current state verified by a
+  successful lookup; do not invent the missing write-result fields.
 - If a write fails or provenance can't be stamped, **say so plainly** — don't
   paper over it.
 - **Don't fabricate** `id`s, statuses, or artifact refs — report only what the
