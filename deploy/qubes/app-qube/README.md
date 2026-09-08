@@ -166,7 +166,7 @@ Server 1.19.0 also requires `db/08-access-tokens.sql` on the DB qube followed by
 requires `db/14-native-token-principals.sql`. Native verification is opt-in
 (`ENABLE_NATIVE_TOKENS=false` by default); the marker requirement is pinned true
 and the static key remains absent. Follow the
-[confined native-token rollout](../../../docs/native-access-tokens.md#rollback)
+[confined native-token rollout](../../../docs/native-access-tokens.md#split-qubes-deployment)
 before enabling it. Public Funnel stays OAuth-only.
 
 Server 1.20.0 introduced the allowed+denied audit shape in
