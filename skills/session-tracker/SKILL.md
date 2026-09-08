@@ -81,9 +81,25 @@ Do not add schema fields or perform an extra Open Brain write, lookup, or full
 transcript scan just to maintain or reconstruct the counter. Recover the
 existing record's `id` and scope through the normal resume path before saving.
 
-A failed save is not a checkpoint: retain pending changes and report the
+Distinguish a definite rejection (known not to have committed) from an unknown
+save outcome. For a definite rejection, retain pending changes and report the
 failure. Retry when the cause is resolved, on the next scheduled checkpoint, or
-when explicitly asked; avoid a per-turn retry loop. Cadence never licenses
+when explicitly asked; avoid a per-turn retry loop.
+
+For an unknown outcome from either `session_capture` or `session_update_status`
+(timeout, transport error, or lost response), reconcile in the original scope
+before any retry. Use `session_lookup` with the known `id`; if the initial
+capture's ID was never received, use branch lookup or `session_search` to
+recover the matching record's `id` and current structured state. Verify the
+match against the known work-thread context; a branch/search hit alone is not
+proof. If the intended state is already stored, skip the retry. Any necessary
+recapture uses the recovered ID and the full replacement contract, including all
+pending changes; use a status-only update only when status is the sole pending
+change. If reconciliation cannot establish the outcome or matching record,
+retain pending work and report the uncertainty without blindly writing again. A
+missing search result does not establish that the write was rejected.
+
+An unverified save is not a confirmed checkpoint. Cadence never licenses
 inventing a resumable handle or claiming an unsaved change is stored.
 
 ## Mental model
@@ -410,11 +426,13 @@ retain existing fields and artifacts.
    > optional resumable handle — not the upsert key; omitting it never
    > duplicates.)
 
-   > ⚠️ **A record whose `id` you've lost** — you didn't stash it, or you're
-   > picking the thread up on another machine — takes the insert path on a
-   > straight re-capture and mints a _duplicate_, orphaning the existing DB row.
-   > First recover the row's `id` (`session_lookup(branch="…")` or
-   > `session_search`) and put it in the TOML's `id =` line; then capture.
+   > ⚠️ **A record whose `id` you've lost or never received** — including an
+   > initial capture whose response was lost — takes the insert path on a
+   > straight re-capture and can mint a _duplicate_, orphaning the existing DB
+   > row. First recover the matching row's `id` and current state
+   > (`session_lookup(branch="…")` or `session_search`, in the original scope).
+   > Apply the reconciliation rules above: skip an already-satisfied retry and
+   > include the recovered `id` on any necessary recapture.
 
 5. Don't author provenance — the server stamps `source` / `source_node`.
 
@@ -523,6 +541,8 @@ pattern.
 
 - **Never claim a session was captured/updated unless the tool returned
   success.** Surface the actual return (`created`, `reembedded`, `status`).
+  After an unknown write outcome, report the current state verified by a
+  successful lookup; do not invent the missing write-result fields.
 - If a write fails or provenance can't be stamped, **say so plainly** — don't
   paper over it.
 - **Don't fabricate** `id`s, statuses, or artifact refs — report only what the
