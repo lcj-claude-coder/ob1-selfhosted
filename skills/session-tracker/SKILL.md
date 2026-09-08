@@ -55,11 +55,13 @@ end the work session.
 - Then save every third substantive turn: **6, 9, 12, …**. Between checkpoints,
   retain changes in working context rather than issuing session writes.
 - Honor an explicit user request to save immediately, even off cadence or with
-  no new work. It does not reset the regular counter.
+  no new work. Explicit requests take precedence over the greeting/goodbye
+  no-op rules. They do not reset the regular counter.
 - Save the **final significant turn** when finishing the task, handing off,
   pausing for review, or stopping on a blocker. Include the current state and
   what comes next. If an ending becomes apparent later, flush any still-unsaved
-  substantive work once; do not rewrite an already-current record for a goodbye.
+  substantive work once; do not rewrite an already-current record for a goodbye
+  alone.
 - Coalesce coinciding triggers into one write using the latest state. A commit,
   test run, tool result, or ordinary plan adjustment does not independently
   force an off-cadence save while work continues. A pure lookup or status query
